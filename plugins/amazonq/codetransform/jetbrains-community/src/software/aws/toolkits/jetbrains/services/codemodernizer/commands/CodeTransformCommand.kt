@@ -14,4 +14,6 @@ enum class CodeTransformCommand {
     DownloadFailed,
     AuthRestored,
     StartHil,
+    CheckAuth,
+    ReauthStarted,
 }

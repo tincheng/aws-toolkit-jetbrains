@@ -15,6 +15,7 @@ import software.aws.toolkits.core.utils.error
 import software.aws.toolkits.core.utils.getLogger
 import software.aws.toolkits.jetbrains.services.amazonq.apps.AmazonQAppInitContext
 import software.aws.toolkits.jetbrains.services.amazonq.auth.AuthController
+import software.aws.toolkits.jetbrains.services.amazonq.auth.AuthFollowUpType
 import software.aws.toolkits.jetbrains.services.codemodernizer.ArtifactHandler
 import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.CodeTransformTelemetryManager
@@ -66,10 +67,13 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.DownloadFai
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.JobId
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MavenCopyCommandsResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MavenDependencyReportCommandsResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.UploadFailureReason
+import software.aws.toolkits.jetbrains.services.codemodernizer.panels.managers.CodeModernizerBottomWindowPanelManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.session.ChatSessionStorage
 import software.aws.toolkits.jetbrains.services.codemodernizer.session.Session
 import software.aws.toolkits.jetbrains.services.codemodernizer.state.CodeModernizerSessionState
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getModuleOrProjectNameForFile
+import software.aws.toolkits.jetbrains.services.codemodernizer.utils.isCodeTransformAvailable
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.toVirtualFile
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.tryGetJdk
 import software.aws.toolkits.jetbrains.services.cwc.messages.ChatMessageType
@@ -135,9 +139,8 @@ class CodeTransformChatController(
     suspend fun tryRestoreChatProgress(): Boolean {
         val isTransformOngoing = codeModernizerManager.isModernizationJobActive()
         val isMvnRunning = codeModernizerManager.isRunningMvn()
-        val isTransformationResuming = codeModernizerManager.isModernizationJobResuming()
 
-        while (isTransformationResuming) {
+        while (codeModernizerManager.isModernizationJobResuming()) {
             // Poll until transformation is resumed
             delay(50)
         }
@@ -282,8 +285,56 @@ class CodeTransformChatController(
         processTransformQuickAction(IncomingCodeTransformMessage.Transform(tabId = message.tabId, startNewTransform = true))
     }
 
+    /**
+     * Invoking this is equivalent to user clicking "reauthenticate" in the Chat when credentials expired.
+     */
+    suspend fun handleReauthStarted(activeTabId: String) {
+        if (isCodeTransformAvailable(context.project)) return
+        processAuthFollowUpClick(IncomingCodeTransformMessage.AuthFollowUpWasClicked(activeTabId, AuthFollowUpType.ReAuth))
+    }
+
+    /**
+     * Calls [checkForAuth] to verify auth status, if auth invalid informs [CodeModernizerManager] and [CodeModernizerBottomWindowPanelManager]
+     * that auth changed to invalid.
+     */
+    suspend fun handleCheckAuth(activeTabId: String) {
+        if (!checkForAuth(activeTabId)) {
+            runInEdt {
+                CodeModernizerBottomWindowPanelManager.getInstance(context.project).toolWindow?.isAvailable = isCodeTransformAvailable(context.project)
+                CodeModernizerManager.getInstance(context.project).handleCredentialsChanged()
+            }
+        }
+    }
+
+    /**
+     * This handles the actions needed when user is reauthenticated.
+     * Attempts to resume the job if one was ongoing pre auth expiry or requests users to start a new transformation.
+     */
+    suspend fun handleAuthRestored() {
+        if (!isCodeTransformAvailable(context.project)) return
+        val manager = CodeModernizerManager.getInstance(context.project)
+        manager.handleCredentialsChanged()
+        if (manager.isJobOngoingInState()) {
+            runInEdt {
+                CodeModernizerBottomWindowPanelManager.getInstance(context.project).toolWindow?.isAvailable = true
+                manager.tryResumeJob()
+            }
+        } else {
+            codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
+        }
+    }
+
     override suspend fun processCodeTransformCommand(message: CodeTransformActionMessage) {
-        val activeTabId = codeTransformChatHelper.getActiveCodeTransformTabId() ?: return
+        var activeTabId = codeTransformChatHelper.getActiveCodeTransformTabId()
+        activeTabId ?: logger.error { "in processCodeTransformCommand there is no tab active for CodeTransform: activeTabId == $activeTabId" }
+        if (activeTabId == null && message.command == CodeTransformCommand.TransformResuming) {
+            // If we are resuming a job, we should show transform progress also in chat, so open a tab if this is the case.
+            codeTransformChatHelper.createNewCodeTransformTab()
+            while (activeTabId == null) {
+                activeTabId = codeTransformChatHelper.getActiveCodeTransformTabId()
+            }
+        }
+        activeTabId ?: return
 
         when (message.command) {
             CodeTransformCommand.StopClicked -> {
@@ -296,43 +347,37 @@ class CodeTransformChatController(
                     handleMavenBuildResult(result)
                 }
             }
-            CodeTransformCommand.UploadComplete -> {
-                handleCodeTransformUploadCompleted()
-            }
+            CodeTransformCommand.UploadComplete -> handleCodeTransformUploadCompleted()
             CodeTransformCommand.TransformComplete -> {
                 val result = message.transformResult
                 if (result != null) {
                     handleCodeTransformResult(result)
                 }
             }
-            CodeTransformCommand.TransformStopped -> {
-                handleCodeTransformStoppedByUser()
-            }
-            CodeTransformCommand.TransformResuming -> {
-                handleCodeTransformJobResume()
-            }
-            CodeTransformCommand.StartHil -> {
-                handleHil()
-            }
-            CodeTransformCommand.ClientBuild -> {
-                handleClientBuild()
-            }
+            CodeTransformCommand.TransformStopped -> handleCodeTransformStoppedByUser()
+            CodeTransformCommand.TransformResuming -> handleCodeTransformJobResume()
+            CodeTransformCommand.StartHil -> handleHil()
+            CodeTransformCommand.AuthRestored -> handleAuthRestored()
+            CodeTransformCommand.ReauthStarted -> handleReauthStarted(activeTabId)
+            CodeTransformCommand.CheckAuth -> handleCheckAuth(activeTabId)
+            CodeTransformCommand.ClientBuild -> handleClientBuild()
             CodeTransformCommand.DownloadFailed -> {
                 val result = message.downloadFailure
                 if (result != null) {
                     handleDownloadFailed(message.downloadFailure)
                 }
             }
-            else -> {
-                processTransformQuickAction(IncomingCodeTransformMessage.Transform(tabId = activeTabId))
-            }
         }
     }
 
     override suspend fun processTabCreated(message: IncomingCodeTransformMessage.TabCreated) {
         logger.debug { "$FEATURE_NAME: New tab created: $message" }
+        codeTransformChatHelper.setActiveCodeTransformTabId(message.tabId)
     }
 
+    /**
+     * Return true if authenticated, else show authentication message and return false.
+     */
     private suspend fun checkForAuth(tabId: String): Boolean {
         var session: Session? = null
         try {
@@ -402,11 +447,15 @@ class CodeTransformChatController(
         when (result) {
             is CodeModernizerJobCompletedResult.Stopped, CodeModernizerJobCompletedResult.JobAbortedBeforeStarting -> handleCodeTransformStoppedByUser()
             else -> {
-                // DEMO: for client build, add as a new message at the end instead of updating previous message.
-                codeTransformChatHelper.addNewMessage(
-                    buildTransformResultChatContent(result)
-                )
-                codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
+                if (result is CodeModernizerJobCompletedResult.ZipUploadFailed && result.failureReason is UploadFailureReason.CREDENTIALS_EXPIRED) {
+                    return
+                } else {
+                    // DEMO: for client build, would need to add as a new message at the end instead of updating previous message.
+                    codeTransformChatHelper.updateLastPendingMessage(
+                        buildTransformResultChatContent(result)
+                    )
+                  g  codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
+                }
             }
         }
     }
@@ -550,7 +599,8 @@ class CodeTransformChatController(
     }
 
     private suspend fun handleDownloadFailed(failureReason: DownloadFailureReason) {
-        codeTransformChatHelper.addNewMessage(buildDownloadFailureChatContent(failureReason))
+        val message = buildDownloadFailureChatContent(failureReason) ?: return
+        codeTransformChatHelper.addNewMessage(message)
         codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
     }
 
