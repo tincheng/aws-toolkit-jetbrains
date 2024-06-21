@@ -10,6 +10,8 @@ import com.intellij.openapi.util.io.FileUtil
 import com.intellij.openapi.vfs.VirtualFile
 import software.aws.toolkits.core.utils.createParentDirectories
 import software.aws.toolkits.core.utils.exists
+import software.aws.toolkits.jetbrains.services.codemodernizer.constants.CLIENT_BUILD_UPLOAD_LOG_ZIP_NAME
+import software.aws.toolkits.jetbrains.services.codemodernizer.constants.CLIENT_BUILD_UPLOAD_SOURCE_ZIP_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_ARTIFACT_DIR_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_ARTIFACT_POMFOLDER_DIR_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_DEPENDENCY_REPORT_DIR_NAME
@@ -130,6 +132,9 @@ fun getPathToHilDependencyReport(tmpDirPath: Path): Path = getPathToHilDependenc
 fun getPathToHilDependenciesRootDir(tmpDirPath: Path): Path = tmpDirPath.resolve(HIL_DEPENDENCY_ROOT_DIR_NAME)
 
 fun getPathToHilUploadZip(tmpDirPath: Path): Path = tmpDirPath.resolve(HIL_UPLOAD_ZIP_NAME)
+
+fun getPathToClientBuildLogUploadZip(tmpDirPath: Path): Path = tmpDirPath.resolve(CLIENT_BUILD_UPLOAD_LOG_ZIP_NAME)
+fun getPathToClientBuildSourceUploadZip(tmpDirPath: Path): Path = tmpDirPath.resolve(CLIENT_BUILD_UPLOAD_SOURCE_ZIP_NAME)
 
 fun findLineNumberByString(virtualFile: VirtualFile, searchString: String): Int? {
     val text = runReadAction {

@@ -21,9 +21,12 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_DEP
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_MANIFEST_FILE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runDependencyReportCommands
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runHilMavenCopyDependency
+import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runMavenClientBuild
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runMavenCopyCommands
 import software.aws.toolkits.jetbrains.services.codemodernizer.panels.managers.CodeModernizerBottomWindowPanelManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.toolwindow.CodeModernizerBottomToolWindowFactory
+import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToClientBuildLogUploadZip
+import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToClientBuildSourceUploadZip
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToHilArtifactPomFolder
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToHilDependenciesRootDir
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToHilUploadZip
@@ -36,6 +39,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.io.path.Path
 import kotlin.io.path.pathString
@@ -84,6 +88,9 @@ data class CodeModernizerSessionContext(
     }
 
     fun executeMavenCopyCommands(sourceFolder: File, buildLogBuilder: StringBuilder) = runMavenCopyCommands(sourceFolder, buildLogBuilder, LOG, project)
+
+    fun executeMavenClientBuildCommand(sourceFolder: File, command: String, javaVersion: String) =
+        runMavenClientBuild(sourceFolder, LOG, project, command, javaVersion)
 
     private fun executeHilMavenCopyDependency(sourceFolder: File, destinationFolder: File, buildLogBuilder: StringBuilder) = runHilMavenCopyDependency(
         sourceFolder,
@@ -171,6 +178,88 @@ data class CodeModernizerSessionContext(
                 throw CodeModernizerException("Unknown exception occurred")
             }
         }
+
+    fun createZipForClientSideBuildLog(tempPath: Path): ZipCreationResult =
+        // copy the buildCommandOutput.log in current client side build temp directory into a folder and zip it.
+        runReadAction {
+            try {
+                val buildLogFilePath = tempPath.resolve("buildCommandOutput.log")
+                val buildLogFile = File(buildLogFilePath.pathString)
+                if (!buildLogFile.exists()) {
+                    LOG.warn("buildCommandOutput.log does not exist in the current directory: $buildLogFilePath, file: $buildLogFile")
+                    throw CodeModernizerException("DEMO: cannot find build log")
+                }
+
+                // create temp directory for the build log
+                val transformBuildLogDir = tempPath.resolve("transform_build_log")
+                Files.createDirectory(transformBuildLogDir)
+
+                // move the file
+                val transformedLogFilePath = transformBuildLogDir.resolve(buildLogFile.name)
+                Files.move(buildLogFile.toPath(), transformedLogFilePath)
+
+                val zipFile = Files.createFile(getPathToClientBuildLogUploadZip(tempPath))
+
+                ZipOutputStream(Files.newOutputStream(zipFile)).use { zip ->
+                    // Create a root entry for "transform_build_log/"
+                    val rootEntry = ZipEntry("transform_build_log/")
+                    zip.putNextEntry(rootEntry)
+                    zip.closeEntry()
+
+                    Files.walk(transformBuildLogDir)
+                        .filter { it != transformBuildLogDir }
+                        .forEach { path ->
+                            val relativePath = transformBuildLogDir.relativize(path)
+                            val zipEntry = ZipEntry("transform_build_log/${relativePath.toString()}")
+                            zip.putNextEntry(zipEntry)
+                            if (Files.isRegularFile(path)) {
+                                Files.copy(path, zip)
+                            }
+                            zip.closeEntry()
+                        }
+                }
+
+                ZipCreationResult.Succeeded(zipFile.toFile())
+            } catch (e: Exception) {
+                LOG.error(e) { e.message.toString() }
+                throw CodeModernizerException("Unknown exception occurred")
+            }
+        }
+
+    fun createZipForClientSideSourceCode(tempPath: Path): ZipCreationResult =
+        // re-upload the tmp directory. No need to add manifest file or dependencies.
+        // Leaving the initial instructions.json in there should be okay.
+        runReadAction {
+            try {
+                // the temp folder containing downloaded client side build artifact
+                val rootDirectory = File(tempPath.pathString)
+
+                val rootFiles = iterateThroughDependencies(rootDirectory)
+
+
+                val zipFile = Files.createFile(getPathToClientBuildSourceUploadZip(tempPath))
+                ZipOutputStream(Files.newOutputStream(zipFile)).use { zip ->
+                    // Source codes
+                    rootFiles.forEach { depFile ->
+                        val relativePath = File(depFile.path).relativeTo(rootDirectory)
+                        val paddedPath = rootDirectory.resolve(relativePath)
+                        var paddedPathString = paddedPath.toPath().toString()
+                        // Convert Windows file path to work on Linux
+                        if (File.separatorChar != '/') {
+                            paddedPathString = paddedPathString.replace('\\', '/')
+                        }
+                        depFile.inputStream().use {
+                            zip.putNextEntry(paddedPathString, it)
+                        }
+                    }
+                }
+
+                ZipCreationResult.Succeeded(zipFile.toFile())
+            } catch (e: Exception) {
+                LOG.error(e) { e.message.toString() }
+                throw CodeModernizerException("Unknown exception occurred")
+            }
+    }
 
     fun createZipWithModuleFiles(copyResult: MavenCopyCommandsResult): ZipCreationResult {
         val telemetry = CodeTransformTelemetryManager.getInstance(project)

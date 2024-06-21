@@ -27,6 +27,7 @@ import software.aws.toolkits.jetbrains.services.amazonq.CODE_TRANSFORM_TROUBLESH
 import software.aws.toolkits.jetbrains.services.codemodernizer.client.GumbyClient
 import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTransformMessageListener
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerArtifact
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformFailureBuildLog
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
@@ -85,6 +86,16 @@ class ArtifactHandler(private val project: Project, private val clientAdaptor: G
             }
         }
         return zipFilePath to totalDownloadBytes
+    }
+
+    suspend fun downloadClientBuildArtifact(jobId: JobId, artifactId: String, tmpDir: File): CodeTransformClientBuildDownloadArtifact {
+        val downloadResultsResponse = clientAdaptor.downloadExportResultArchive(jobId, artifactId)
+
+        val tmpPath = tmpDir.toPath()
+        val (downloadZipFilePath, _) = unzipToPath(downloadResultsResponse, tmpPath)
+        LOG.info { "DEMO: Successfully converted the client build instruction downloaded to a zip at ${downloadZipFilePath.toAbsolutePath()}." }
+        // DEMO: for demo purpose, just use the same HIL artifact DIR name "q-hil-dependency-artifacts"
+        return CodeTransformClientBuildDownloadArtifact.create(downloadZipFilePath, getPathToHilArtifactDir(tmpPath))
     }
 
     suspend fun downloadHilArtifact(jobId: JobId, artifactId: String, tmpDir: File): CodeTransformHilDownloadArtifact? {
@@ -151,6 +162,7 @@ class ArtifactHandler(private val project: Project, private val clientAdaptor: G
 
             val (path, totalDownloadBytes) = unzipToPath(downloadResultsResponse)
             val zipPath = path.toAbsolutePath().toString()
+
             LOG.info { "Successfully converted the download to a zip at $zipPath." }
 
             // 4. Deserialize zip

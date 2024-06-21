@@ -44,7 +44,7 @@ suspend fun JobId.pollTransformationStatusAndPlan(
     isDisposed: AtomicBoolean,
     project: Project,
     maxDuration: Duration = Duration.ofSeconds(604800),
-    onStateChange: (previousStatus: TransformationStatus?, currentStatus: TransformationStatus, transformationPlan: TransformationPlan?) -> Unit,
+    onStateChange: (previousStatus: TransformationStatus?, currentStatus: TransformationStatus, transformationPlan: TransformationPlan?, reason: String) -> Unit,
 ): PollingResult {
     val telemetry = CodeTransformTelemetryManager.getInstance(project)
     var state = TransformationStatus.UNKNOWN_TO_SDK_VERSION
@@ -90,7 +90,8 @@ suspend fun JobId.pollTransformationStatusAndPlan(
                 }
                 if (newStatus !in failOn && (newStatus != state || newPlan != transformationPlan)) {
                     transformationPlan = newPlan
-                    onStateChange(state, newStatus, transformationPlan)
+                    // DEMO: send the failureReason containing the instruction id
+                    onStateChange(state, newStatus, transformationPlan, transformationResponse?.transformationJob()?.reason().orEmpty())
                 }
                 state = newStatus
                 numRefreshes = 0
@@ -105,7 +106,7 @@ suspend fun JobId.pollTransformationStatusAndPlan(
         }
     } catch (e: Exception) {
         // Still call onStateChange to update the UI
-        onStateChange(state, TransformationStatus.FAILED, transformationPlan)
+        onStateChange(state, TransformationStatus.FAILED, transformationPlan, "")
         when (e) {
             is WaiterUnrecoverableException, is AccessDeniedException -> {
                 return PollingResult(false, transformationResponse?.transformationJob(), state, transformationPlan)

@@ -31,6 +31,7 @@ import software.aws.toolkits.core.utils.warn
 import software.aws.toolkits.jetbrains.core.coroutines.projectCoroutineScope
 import software.aws.toolkits.jetbrains.services.amazonq.CODE_TRANSFORM_TROUBLESHOOT_DOC_MVN_FAILURE
 import software.aws.toolkits.jetbrains.services.amazonq.CODE_TRANSFORM_TROUBLESHOOT_DOC_PROJECT_SIZE
+import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerSession.Companion
 import software.aws.toolkits.jetbrains.services.codemodernizer.client.GumbyClient
 import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTransformMessageListener
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_POM_FILE_NAME
@@ -39,6 +40,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModerni
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerJobCompletedResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerSessionContext
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerStartJobResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CustomerSelection
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.Dependency
@@ -47,6 +49,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.JobId
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MAVEN_CONFIGURATION_FILE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MavenCopyCommandsResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MavenDependencyReportCommandsResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.UploadFailureReason
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.ValidationResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.panels.managers.CodeModernizerBottomWindowPanelManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.state.CodeModernizerSessionState
@@ -81,6 +84,7 @@ import java.io.File
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.io.path.Path
 import kotlin.io.path.pathString
 
 @State(name = "codemodernizerStates", storages = [Storage("aws.xml", roamingType = RoamingType.PER_OS)])
@@ -235,6 +239,12 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         val session = codeTransformationSession as CodeModernizerSession
         initModernizationJobUI(true, project.getModuleOrProjectNameForFile(session.sessionContext.configurationFile))
         launchModernizationJob(session, copyResult)
+    }
+
+    suspend fun resumePollingFromClientBuild() {
+        // DEMO: there doesn't seem to be specific logic to HIL in handleJobResumedFromHil. Should be okay to reuse in demo.
+        val result = handleJobResumedFromHil(managerState.getLatestJobId(), codeTransformationSession as CodeModernizerSession)
+        postModernizationJob(result)
     }
 
     suspend fun resumePollingFromHil() {
@@ -444,9 +454,12 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         }
 
         if (result is CodeModernizerJobCompletedResult.JobPaused) {
-            codeTransformationSession?.setHilDownloadArtifactId(result.downloadArtifactId)
+            //codeTransformationSession?.setHilDownloadArtifactId(result.downloadArtifactId)
 
-            CodeTransformMessageListener.instance.onStartingHil()
+            // For DEMO purpose, do not trigger the HIL flow if Job is paused
+            // CodeTransformMessageListener.instance.onStartingHil()
+            LOG.info { "DEMO: bypassing HIL flow" }
+            CodeTransformMessageListener.instance.onClientBuild()
 
             return
         }
@@ -760,6 +773,100 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         isModernizationInProgress.set(false)
     }
 
+    suspend fun getClientBuildArtifact(): CodeTransformClientBuildDownloadArtifact {
+        val jobId = codeTransformationSession?.getActiveJobId() ?: throw CodeModernizerException("DEMO: Unable to find jobId")
+        val clientBuildInstructionId = codeTransformationSession?.getClientBuildArtifactId() ?: throw CodeModernizerException("DEMO: Unable to find client build artifact id")
+
+        val tmpDir = try {
+            createTempDirectory("", null)
+        } catch (e: Exception) {
+            val errorMessage = "DEMO: Unexpected error when creating tmp dir for client build instruction: ${e.localizedMessage}"
+            LOG.error { errorMessage }
+            throw CodeModernizerException("DEMO: Unable to create temp dir for client build")
+        }
+        try {
+            val clientBuildArtifact = artifactHandler.downloadClientBuildArtifact(jobId, clientBuildInstructionId, tmpDir)
+            LOG.info { "DEMO: Received instructions: ${clientBuildArtifact.instructions}" }
+            codeTransformationSession?.setClientBuildArtifact(clientBuildArtifact)
+            return clientBuildArtifact
+        } catch (e: Exception) {
+            LOG.error { e.message.toString() }
+            throw CodeModernizerException("DEMO: Unable to download client build artifact")
+        }
+    }
+
+    fun handleClientSideBuild() {
+        val instructions = codeTransformationSession?.getClientBuildArtifact()?.instructions
+        val artifactDirectory = codeTransformationSession?.getClientBuildArtifact()?.outputDirPath
+        if (instructions == null) {
+            LOG.error { "DEMO: Unable to find client build instructions from Session state" }
+            throw CodeModernizerException("DEMO: Unable to find client build instructions from Session state")
+        }
+        val buildCommand = instructions.buildCommand
+        val javaVersion = instructions.javaVersion
+
+        if (artifactDirectory == null) {
+            LOG.error { "DEMO: Unable to find client build directory code path from Session state" }
+            throw CodeModernizerException("DEMO: Unable to find client build directory code path from Session state")
+        }
+
+        val sourceFolder = File(artifactDirectory.toString())
+        LOG.info { "DEMO: source folder at $sourceFolder "}
+        val result: MavenCopyCommandsResult? =
+            codeTransformationSession?.sessionContext?.executeMavenClientBuildCommand(sourceFolder, buildCommand, javaVersion)
+
+        if (result == MavenCopyCommandsResult.Failure) {
+            CodeTransformMessageListener.instance.onMavenBuildResult(result)
+            throw CodeModernizerException("DEMO: Unable to build maven locally")
+        } else {
+            LOG.info { "DEMO: maven build result ${result.toString()} "}
+        }
+    }
+
+    suspend fun uploadClientSideBuildArtifact(clientSideBuildPath: Path) {
+        try {
+            val buildLogZipCreationResult = codeTransformationSession?.createClientBuildLogUploadZip(clientSideBuildPath)
+            if (buildLogZipCreationResult?.payload?.exists() == true) {
+                LOG.info { "DEMO: uploading build log zip from ${buildLogZipCreationResult.payload.path}" }
+                // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
+                codeTransformationSession?.uploadHilPayload(buildLogZipCreationResult.payload)
+
+                // Add delay between upload complete and trying to resume
+                delay(500)
+
+                codeTransformationSession?.resumeTransformFromHil()
+            } else {
+                throw CodeModernizerException("Cannot create dependency zip for HIL")
+            }
+        } catch (e: Exception) {
+            LOG.error { "DEMO: unable to zip or upload build log after client side build: ${e.localizedMessage}" }
+            throw e
+        } finally {
+            // clean up the zip
+        }
+
+        try {
+            val sourceCodeZipCreationResult = codeTransformationSession?.createClientBuildSourceUploadZip(clientSideBuildPath)
+            if (sourceCodeZipCreationResult?.payload?.exists() == true) {
+                LOG.info { "DEMO: uploading build log" }
+                // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
+                codeTransformationSession?.uploadHilPayload(sourceCodeZipCreationResult.payload)
+
+                // Add delay between upload complete and trying to resume
+                delay(500)
+
+                codeTransformationSession?.resumeTransformFromHil()
+            } else {
+                throw CodeModernizerException("Cannot create dependency zip for HIL")
+            }
+        } catch (e: Exception) {
+            LOG.error { "DEMO: unable to zip or upload source code after client side build: ${e.localizedMessage}" }
+            throw e
+        } finally {
+            // clean up the zip
+        }
+    }
+
     suspend fun getArtifactForHil(): CodeTransformHilDownloadArtifact? {
         if (codeTransformationSession?.getHilDownloadArtifact() != null) {
             return codeTransformationSession?.getHilDownloadArtifact()
@@ -861,6 +968,17 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
             telemetry.error(errorMessage)
             LOG.error { errorMessage }
             return MavenCopyCommandsResult.Failure
+        }
+    }
+
+    fun tryResumeAfterClientBuild() {
+        try {
+            // TODO: consider doing upload within this function
+            codeTransformationSession?.resumeTransformFromClientBuild()
+        } catch (e: Exception) {
+            val errorMessage = "Unexpected error when resuming Job from Client Build: ${e.localizedMessage}"
+            telemetry.error(errorMessage)
+            LOG.error { errorMessage }
         }
     }
 

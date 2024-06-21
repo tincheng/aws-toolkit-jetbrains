@@ -21,7 +21,9 @@ val STATES_WHERE_PLAN_EXIST = setOf(
     TransformationStatus.TRANSFORMED,
     TransformationStatus.PARTIALLY_COMPLETED,
     TransformationStatus.COMPLETED,
-    TransformationStatus.PAUSED,
+    // In the Client Build prototype, job states changed from ACCEPTED -> PREPARING -> PAUSED, but at that stage, there are no plans available yet.
+    // Hence removing Paused state from triggering plan generation.
+    //TransformationStatus.PAUSED,
     TransformationStatus.RESUMED,
 )
 

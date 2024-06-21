@@ -13,7 +13,12 @@ sealed class CodeModernizerJobCompletedResult {
     data class JobCompletedSuccessfully(val jobId: JobId) : CodeModernizerJobCompletedResult()
     data class JobPartiallySucceeded(val jobId: JobId, val targetJavaVersion: JavaSdkVersion) : CodeModernizerJobCompletedResult()
 
-    data class JobPaused(val jobId: JobId, val downloadArtifactId: String) : CodeModernizerJobCompletedResult()
+    // DEMO: client build
+    data class JobPaused(
+        val jobId: JobId,
+        val downloadArtifactId: String,
+        val clientBuildArtifactId: String
+    ) : CodeModernizerJobCompletedResult()
 
     data class JobFailedInitialBuild(val jobId: JobId, val failureReason: String, val hasBuildLog: Boolean) : CodeModernizerJobCompletedResult()
     object ManagerDisposed : CodeModernizerJobCompletedResult()

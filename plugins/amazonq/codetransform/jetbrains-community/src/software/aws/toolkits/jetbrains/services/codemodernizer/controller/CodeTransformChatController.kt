@@ -25,6 +25,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTran
 import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTransformCommand
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.FEATURE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCheckingValidProjectChatContent
+import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildClientBuildChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileHilAlternativeVersionContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalFailedChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalInProgressChatContent
@@ -58,6 +59,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.messages.CodeTran
 import software.aws.toolkits.jetbrains.services.codemodernizer.messages.CodeTransformCommandMessage
 import software.aws.toolkits.jetbrains.services.codemodernizer.messages.IncomingCodeTransformMessage
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerJobCompletedResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CustomerSelection
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.DownloadFailureReason
@@ -311,6 +313,9 @@ class CodeTransformChatController(
             CodeTransformCommand.StartHil -> {
                 handleHil()
             }
+            CodeTransformCommand.ClientBuild -> {
+                handleClientBuild()
+            }
             CodeTransformCommand.DownloadFailed -> {
                 val result = message.downloadFailure
                 if (result != null) {
@@ -404,6 +409,26 @@ class CodeTransformChatController(
         }
     }
 
+    private suspend fun resumeAfterClientBuild() {
+        try {
+            codeModernizerManager.tryResumeAfterClientBuild()
+
+            // TODO: is this needed?
+            runInEdt {
+                codeModernizerManager.getBottomToolWindow().show()
+            }
+
+            codeTransformChatHelper.chatDelayLong()
+            // Add delay between resume complete and trying to poll again
+            delay(1000)
+
+            codeModernizerManager.resumePollingFromClientBuild()
+        } catch (e: Exception) {
+            logger.error { "DEMO: Encountered error when trying to resume: ${e.localizedMessage}" }
+            codeTransformChatHelper.updateLastPendingMessage(buildHilCannotResumeContent())
+        }
+    }
+
     private suspend fun hilTryResumeAfterError(errorMessage: String) {
         codeTransformChatHelper.addNewMessage(buildHilErrorContent(errorMessage))
         codeTransformChatHelper.addNewMessage(buildHilResumeWithErrorContent())
@@ -430,6 +455,54 @@ class CodeTransformChatController(
         }
     }
 
+    private suspend fun handleClientBuild() {
+        // DEMO: client build
+        codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("START"))
+
+        // Get instruction and source code
+        val downloadArtifact: CodeTransformClientBuildDownloadArtifact
+        try {
+            downloadArtifact = codeModernizerManager.getClientBuildArtifact()
+            codeTransformChatHelper.chatDelayShort()
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent(
+                "FETCHED_INSTRUCTION",
+                downloadArtifact.instructions.buildCommand,
+                downloadArtifact.instructions.javaVersion))
+        } catch (e: Exception) {
+            logger.error { "DEMO: Unable to download any client-side build instructions" }
+            codeTransformChatHelper.chatDelayShort()
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("FETCH_FAILED"))
+            resumeAfterClientBuild()
+            return
+        }
+
+        try {
+            codeModernizerManager.handleClientSideBuild()
+            codeTransformChatHelper.chatDelayShort()
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_COMPLETE"))
+        } catch (e: Exception) {
+            logger.error { "DEMO: client-side build for your job was not successful due to $e" }
+            codeTransformChatHelper.chatDelayShort()
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_FAILED"))
+            resumeAfterClientBuild()
+            return
+        }
+
+        try {
+            codeModernizerManager.uploadClientSideBuildArtifact(downloadArtifact.outputDirPath)
+            codeTransformChatHelper.chatDelayShort()
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("ARTIFACT_UPLOADED"))
+        } catch (e: Exception) {
+            logger.error { "DEMO: Unable to upload client-side build artifact due to $e" }
+            codeTransformChatHelper.chatDelayShort()
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("ARTIFACT_UPLOAD_FAILED"))
+            resumeAfterClientBuild()
+            return
+        }
+
+        resumeAfterClientBuild()
+    }
+
     private suspend fun handleHil() {
         codeTransformChatHelper.updateLastPendingMessage(buildHilInitialContent())
 
@@ -439,7 +512,6 @@ class CodeTransformChatController(
             hilTryResumeAfterError(message("codemodernizer.chat.message.hil.error.cannot_download_artifact"))
             return
         }
-
         codeTransformChatHelper.addNewMessage(buildTransformDependencyErrorChatContent(hilDownloadArtifact), codeTransformChatHelper.generateHilPomItemId())
         codeTransformChatHelper.addNewMessage(buildTransformFindingLocalAlternativeDependencyChatContent(), clearPreviousItemButtons = false)
         val createReportResult = codeModernizerManager.createDependencyReport(hilDownloadArtifact)

@@ -18,6 +18,10 @@ class CodeTransformMessageListener {
         _messages.tryEmit(CodeTransformActionMessage(CodeTransformCommand.StartHil))
     }
 
+    fun onClientBuild() {
+        _messages.tryEmit(CodeTransformActionMessage(CodeTransformCommand.ClientBuild))
+    }
+
     fun onStopClicked() {
         _messages.tryEmit(CodeTransformActionMessage(CodeTransformCommand.StopClicked))
     }

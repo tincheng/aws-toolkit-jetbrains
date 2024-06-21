@@ -454,6 +454,31 @@ fun buildHilCannotResumeContent() = CodeTransformChatMessageContent(
     ),
 )
 
+fun buildClientBuildChatContent(status: String, command: String? = "", javaVersion: String? = ""): CodeTransformChatMessageContent {
+    // DEMO: ideally these statuses should be Enum
+    var message = "None"
+    if (status == "START") {
+        message = "Your job has been paused for client-side build. I'm downloading client side build instructions."
+    } else if (status == "FETCHED_INSTRUCTION") {
+        message = "I'm attempting to build your project locally in a temp directory with command: [$command] and [$javaVersion] "
+    } else if (status == "BUILD_COMPLETE") {
+        message = "Local build was completed. I'm uploading build log and artifact back to Q Transform."
+    } else if (status == "ARTIFACT_UPLOADED") {
+        message = "I've successfully uploaded client-side build artifacts and will be resuming your job."
+    } else if (status == "FETCH_FAILED") {
+        message = "Sorry, I was unable to download any client-side build instructions."
+    } else if (status == "BUILD_FAILED") {
+        message = "Sorry, client-side build for your job was not successful."
+    } else if (status == "ARTIFACT_UPLOAD_FAILED") {
+        message = "Sorry, I was unable to upload client-side build artifact."
+    }
+
+    return CodeTransformChatMessageContent(
+        type = CodeTransformChatMessageType.FinalizedAnswer,
+        message = message
+    )
+}
+
 fun buildDownloadFailureChatContent(reason: DownloadFailureReason): CodeTransformChatMessageContent {
     val message = when (reason) {
         is DownloadFailureReason.SSL_HANDSHAKE_ERROR -> {

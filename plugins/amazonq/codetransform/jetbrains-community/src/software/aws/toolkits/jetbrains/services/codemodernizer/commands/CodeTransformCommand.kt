@@ -8,6 +8,7 @@ enum class CodeTransformCommand {
     TransformStopped,
     MavenBuildComplete,
     UploadComplete,
+    ClientBuild,
     TransformComplete,
     TransformResuming,
     DownloadFailed,
