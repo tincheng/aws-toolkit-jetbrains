@@ -388,7 +388,6 @@ private fun runMavenClientBuildCommand(
             } else if (javaVersion == "JAVA_17") {
                 mvnSettings.setJreName("corretto-17")
             }
-
             transformMvnRunner.run(commandParams, mvnSettings, transformRunnable)
         } catch (t: Throwable) {
             transformRunnable.setExitCode(Integer.MIN_VALUE) // to stop looking for the exitCode

@@ -28,7 +28,6 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.constants.FEATURE
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCheckingValidProjectChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildClientBuildChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileHilAlternativeVersionContent
-import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalFailedChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalInProgressChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalSuccessChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildDownloadFailureChatContent
@@ -454,7 +453,7 @@ class CodeTransformChatController(
                     codeTransformChatHelper.updateLastPendingMessage(
                         buildTransformResultChatContent(result)
                     )
-                  g  codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
+                    codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
                 }
             }
         }

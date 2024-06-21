@@ -345,7 +345,7 @@ class CodeModernizerSession(
         LOG.info { "Creating uploadId for artifact with checksum $sha256checksum and jobId: $jobId" }
 
         val createUploadUrlResponse = clientAdaptor.createHilUploadUrl(sha256checksum, jobId = jobId)
-g
+
         LOG.info {
             "Uploading hil artifact with checksum $sha256checksum using uploadId: ${
                 createUploadUrlResponse.uploadId()
