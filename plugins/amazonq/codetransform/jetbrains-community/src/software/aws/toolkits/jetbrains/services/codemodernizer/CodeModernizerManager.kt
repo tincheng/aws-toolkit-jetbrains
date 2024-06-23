@@ -827,7 +827,7 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         try {
             val buildLogZipCreationResult = codeTransformationSession?.createClientBuildLogUploadZip(clientSideBuildPath)
             if (buildLogZipCreationResult?.payload?.exists() == true) {
-                LOG.info { "DEMO: uploading build log zip from ${buildLogZipCreationResult.payload.path}" }
+                LOG.info { "DEMO: uploading build log zip at ${buildLogZipCreationResult.payload.path}" }
                 // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
                 codeTransformationSession?.uploadHilPayload(buildLogZipCreationResult.payload)
 
@@ -840,15 +840,16 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
             }
         } catch (e: Exception) {
             LOG.error { "DEMO: unable to zip or upload build log after client side build: ${e.localizedMessage}" }
-            throw e
+            // FOR TESTING: see if source code can be uploaded even if build log failed.
+            // throw e
         } finally {
-            // clean up the zip
+            // remove the zip file
         }
 
         try {
             val sourceCodeZipCreationResult = codeTransformationSession?.createClientBuildSourceUploadZip(clientSideBuildPath)
             if (sourceCodeZipCreationResult?.payload?.exists() == true) {
-                LOG.info { "DEMO: uploading build log" }
+                LOG.info { "DEMO: uploading client build source code at ${sourceCodeZipCreationResult.payload.path}" }
                 // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
                 codeTransformationSession?.uploadHilPayload(sourceCodeZipCreationResult.payload)
 

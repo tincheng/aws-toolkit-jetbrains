@@ -460,7 +460,7 @@ fun buildClientBuildChatContent(status: String, command: String? = "", javaVersi
     if (status == "START") {
         message = "Your job has been paused for client-side build. I'm downloading client side build instructions."
     } else if (status == "FETCHED_INSTRUCTION") {
-        message = "I'm attempting to build your project locally in a temp directory with command: [$command] and [$javaVersion] "
+        message = "I'm attempting to build your project locally in a temp directory with command: `$command` and jre version `$javaVersion` "
     } else if (status == "BUILD_COMPLETE") {
         message = "Local build was completed. I'm uploading build log and artifact back to Q Transform."
     } else if (status == "ARTIFACT_UPLOADED") {

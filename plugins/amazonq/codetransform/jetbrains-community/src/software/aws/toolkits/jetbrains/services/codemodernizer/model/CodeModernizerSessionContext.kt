@@ -16,7 +16,11 @@ import software.aws.toolkits.core.utils.error
 import software.aws.toolkits.core.utils.getLogger
 import software.aws.toolkits.core.utils.info
 import software.aws.toolkits.core.utils.putNextEntry
+import software.aws.toolkits.core.utils.warn
+import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerSession
+import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerSession.Companion
 import software.aws.toolkits.jetbrains.services.codemodernizer.CodeTransformTelemetryManager
+import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_ARTIFACT_DIR_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_DEPENDENCIES_ROOT_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_MANIFEST_FILE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runDependencyReportCommands
@@ -223,6 +227,13 @@ data class CodeModernizerSessionContext(
             } catch (e: Exception) {
                 LOG.error(e) { e.message.toString() }
                 throw CodeModernizerException("Unknown exception occurred")
+            } finally {
+                // clean up the temp folder
+                val transformBuildLogDir = tempPath.resolve("transform_build_log")
+                val directory = File(transformBuildLogDir.pathString)
+                if (!directory.deleteRecursively()) {
+                    println("DEMO: Failed to delete transform_build_log directory.")
+                }
             }
         }
 
@@ -236,13 +247,15 @@ data class CodeModernizerSessionContext(
 
                 val rootFiles = iterateThroughDependencies(rootDirectory)
 
+                // q-hil-dependency-artifacts
+                val rootFolder = File(HIL_ARTIFACT_DIR_NAME)
 
                 val zipFile = Files.createFile(getPathToClientBuildSourceUploadZip(tempPath))
                 ZipOutputStream(Files.newOutputStream(zipFile)).use { zip ->
                     // Source codes
                     rootFiles.forEach { depFile ->
                         val relativePath = File(depFile.path).relativeTo(rootDirectory)
-                        val paddedPath = rootDirectory.resolve(relativePath)
+                        val paddedPath = rootFolder.resolve(relativePath)
                         var paddedPathString = paddedPath.toPath().toString()
                         // Convert Windows file path to work on Linux
                         if (File.separatorChar != '/') {

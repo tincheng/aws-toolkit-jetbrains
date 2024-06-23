@@ -326,6 +326,10 @@ class CodeModernizerSession(
         }
         val jobId = state.currentJobId ?: throw CodeModernizerException("No Job ID found")
         val clientAdaptor = GumbyClient.getInstance(sessionContext.project)
+
+        // DEMO: client side build - additional logging
+        LOG.info { "Creating uploadId for artifact with checksum $sha256checksum and jobId: $jobId" }
+
         val createUploadUrlResponse = clientAdaptor.createHilUploadUrl(sha256checksum, jobId = jobId)
 
         LOG.info {
