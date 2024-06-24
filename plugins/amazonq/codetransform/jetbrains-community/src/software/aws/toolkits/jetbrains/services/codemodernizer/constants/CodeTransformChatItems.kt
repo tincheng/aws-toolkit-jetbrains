@@ -490,39 +490,6 @@ fun buildHilCannotResumeContent() = CodeTransformChatMessageContent(
     ),
 )
 
-fun buildClientBuildChatContent(status: String, command: String? = "", javaVersion: String? = ""): CodeTransformChatMessageContent {
-    // DEMO: ideally these statuses should be Enum
-    var message = "None"
-    if (status == "START") {
-        message = "I'm downloading new client side build instructions."
-    } else if (status == "FETCHED_INSTRUCTION") {
-        message = "I'm attempting to build your project locally in a temp directory with command: `$command` and jdk version `$javaVersion` "
-    } else if (status == "BUILD_SUCCESS") {
-        message = "Client side build succeeded for command: `$command` and jdk version `$javaVersion`. I'm uploading local build log to Q Transform."
-    } else if (status == "BUILD_FAILURE") {
-        message = "Client side build failed for command: `$command` and jdk version `$javaVersion`. I'm uploading local build log to Q Transform."
-    } else if (status == "FETCH_FAILED") {
-        message = "Sorry, I was unable to download any client-side build instructions."
-    } else if (status == "BUILD_ERROR") {
-        message = "Sorry, client-side build for your job encountered unexpected error."
-    } else if (status == "ARTIFACT_UPLOAD_FAILED") {
-        message = "Sorry, I was unable to upload client-side build artifact."
-    }
-
-    return CodeTransformChatMessageContent(
-        type = if (status == "START" || status == "FETCHED_INSTRUCTION") CodeTransformChatMessageType.PendingAnswer else CodeTransformChatMessageType.FinalizedAnswer,
-        message = message,
-        buttons = if (status == "FETCHED_INSTRUCTION" || status == "BUILD_SUCCESS" || status == "BUILD_FAILURE") {
-            listOf(
-                openTransformHubButton,
-                stopTransformButton,
-            )
-        } else {
-            emptyList()
-        },
-    )
-}
-
 fun buildDownloadFailureChatContent(downloadFailureReason: DownloadFailureReason): CodeTransformChatMessageContent? {
     val artifactText = getDownloadedArtifactTextFromType(downloadFailureReason.artifactType)
     val (message, docLink) = when (downloadFailureReason) {
@@ -565,6 +532,39 @@ fun buildDownloadFailureChatContent(downloadFailureReason: DownloadFailureReason
             listOf(viewDiffButton, viewSummaryButton)
         } else {
             null
+        },
+    )
+}
+
+fun buildClientBuildChatContent(status: String, command: String? = "", javaVersion: String? = ""): CodeTransformChatMessageContent {
+    // DEMO: ideally these statuses should be Enum
+    var message = "None"
+    if (status == "START") {
+        message = "I'm downloading new client side build instructions."
+    } else if (status == "FETCHED_INSTRUCTION") {
+        message = "I'm attempting to build your project locally in a temp directory with command: `$command` and jdk version `$javaVersion` "
+    } else if (status == "BUILD_SUCCESS") {
+        message = "Client side build succeeded for command: `$command` and jdk version `$javaVersion`. I'm uploading local build log to Q Transform."
+    } else if (status == "BUILD_FAILURE") {
+        message = "Client side build failed for command: `$command` and jdk version `$javaVersion`. I'm uploading local build log to Q Transform."
+    } else if (status == "FETCH_FAILED") {
+        message = "Sorry, I was unable to download any client-side build instructions."
+    } else if (status == "BUILD_ERROR") {
+        message = "Sorry, client-side build for your job encountered unexpected error."
+    } else if (status == "ARTIFACT_UPLOAD_FAILED") {
+        message = "Sorry, I was unable to upload client-side build artifact."
+    }
+
+    return CodeTransformChatMessageContent(
+        type = if (status == "START" || status == "FETCHED_INSTRUCTION") CodeTransformChatMessageType.PendingAnswer else CodeTransformChatMessageType.FinalizedAnswer,
+        message = message,
+        buttons = if (status == "FETCHED_INSTRUCTION" || status == "BUILD_SUCCESS" || status == "BUILD_FAILURE") {
+            listOf(
+                openTransformHubButton,
+                stopTransformButton,
+            )
+        } else {
+            emptyList()
         },
     )
 }
