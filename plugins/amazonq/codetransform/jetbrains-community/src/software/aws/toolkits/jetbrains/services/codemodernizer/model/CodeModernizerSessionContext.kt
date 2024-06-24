@@ -184,7 +184,6 @@ data class CodeModernizerSessionContext(
         }
 
     fun createZipForClientSideBuildLog(tempPath: Path): ZipCreationResult =
-        // copy the buildCommandOutput.log in current client side build temp directory into a folder and zip it.
         runReadAction {
             try {
                 val buildLogFilePath = tempPath.resolve("buildCommandOutput.log")
@@ -194,33 +193,13 @@ data class CodeModernizerSessionContext(
                     throw CodeModernizerException("DEMO: cannot find build log")
                 }
 
-                // create temp directory for the build log
-                val transformBuildLogDir = tempPath.resolve("transform_build_log")
-                Files.createDirectory(transformBuildLogDir)
-
-                // move the file
-                val transformedLogFilePath = transformBuildLogDir.resolve(buildLogFile.name)
-                Files.move(buildLogFile.toPath(), transformedLogFilePath)
-
+                // zip the file as is without moving into any folder
                 val zipFile = Files.createFile(getPathToClientBuildLogUploadZip(tempPath))
-
                 ZipOutputStream(Files.newOutputStream(zipFile)).use { zip ->
-                    // Create a root entry for "transform_build_log/"
-                    val rootEntry = ZipEntry("transform_build_log/")
-                    zip.putNextEntry(rootEntry)
+                    val zipEntry = ZipEntry("buildCommandOutput.log")
+                    zip.putNextEntry(zipEntry)
+                    Files.copy(buildLogFilePath, zip)
                     zip.closeEntry()
-
-                    Files.walk(transformBuildLogDir)
-                        .filter { it != transformBuildLogDir }
-                        .forEach { path ->
-                            val relativePath = transformBuildLogDir.relativize(path)
-                            val zipEntry = ZipEntry("transform_build_log/${relativePath.toString()}")
-                            zip.putNextEntry(zipEntry)
-                            if (Files.isRegularFile(path)) {
-                                Files.copy(path, zip)
-                            }
-                            zip.closeEntry()
-                        }
                 }
 
                 ZipCreationResult.Succeeded(zipFile.toFile())

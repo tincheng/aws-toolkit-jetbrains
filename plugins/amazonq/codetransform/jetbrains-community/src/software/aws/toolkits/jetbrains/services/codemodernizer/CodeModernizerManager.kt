@@ -31,7 +31,6 @@ import software.aws.toolkits.core.utils.warn
 import software.aws.toolkits.jetbrains.core.coroutines.projectCoroutineScope
 import software.aws.toolkits.jetbrains.services.amazonq.CODE_TRANSFORM_TROUBLESHOOT_DOC_MVN_FAILURE
 import software.aws.toolkits.jetbrains.services.amazonq.CODE_TRANSFORM_TROUBLESHOOT_DOC_PROJECT_SIZE
-import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerSession.Companion
 import software.aws.toolkits.jetbrains.services.codemodernizer.client.GumbyClient
 import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTransformMessageListener
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_POM_FILE_NAME
@@ -49,8 +48,8 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.JobId
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MAVEN_CONFIGURATION_FILE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MavenCopyCommandsResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.MavenDependencyReportCommandsResult
-import software.aws.toolkits.jetbrains.services.codemodernizer.model.UploadFailureReason
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.ValidationResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.ZipCreationResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.panels.managers.CodeModernizerBottomWindowPanelManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.state.CodeModernizerSessionState
 import software.aws.toolkits.jetbrains.services.codemodernizer.state.CodeModernizerState
@@ -84,7 +83,6 @@ import java.io.File
 import java.nio.file.Path
 import java.time.Instant
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.io.path.Path
 import kotlin.io.path.pathString
 
 @State(name = "codemodernizerStates", storages = [Storage("aws.xml", roamingType = RoamingType.PER_OS)])
@@ -795,7 +793,7 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         }
     }
 
-    fun handleClientSideBuild() {
+    fun handleClientSideBuild(): MavenCopyCommandsResult? {
         val instructions = codeTransformationSession?.getClientBuildArtifact()?.instructions
         val artifactDirectory = codeTransformationSession?.getClientBuildArtifact()?.outputDirPath
         if (instructions == null) {
@@ -817,54 +815,61 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
 
         if (result == MavenCopyCommandsResult.Failure) {
             CodeTransformMessageListener.instance.onMavenBuildResult(result)
-            throw CodeModernizerException("DEMO: Unable to build maven locally")
         } else {
             LOG.info { "DEMO: maven build result ${result.toString()} "}
         }
+
+        return result
     }
 
-    suspend fun uploadClientSideBuildArtifact(clientSideBuildPath: Path) {
+    suspend fun uploadClientSideBuildArtifact(clientSideBuildPath: Path, buildResult: MavenCopyCommandsResult?) {
+        var zipFile: File? = null
         try {
             val buildLogZipCreationResult = codeTransformationSession?.createClientBuildLogUploadZip(clientSideBuildPath)
             if (buildLogZipCreationResult?.payload?.exists() == true) {
+                zipFile = buildLogZipCreationResult.payload
                 LOG.info { "DEMO: uploading build log zip at ${buildLogZipCreationResult.payload.path}" }
                 // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
                 codeTransformationSession?.uploadHilPayload(buildLogZipCreationResult.payload)
 
                 // Add delay between upload complete and trying to resume
                 delay(500)
-
-                codeTransformationSession?.resumeTransformFromHil()
             } else {
                 throw CodeModernizerException("Cannot create dependency zip for HIL")
             }
         } catch (e: Exception) {
             LOG.error { "DEMO: unable to zip or upload build log after client side build: ${e.localizedMessage}" }
-            // FOR TESTING: see if source code can be uploaded even if build log failed.
-            // throw e
-        } finally {
-            // remove the zip file
-        }
-
-        try {
-            val sourceCodeZipCreationResult = codeTransformationSession?.createClientBuildSourceUploadZip(clientSideBuildPath)
-            if (sourceCodeZipCreationResult?.payload?.exists() == true) {
-                LOG.info { "DEMO: uploading client build source code at ${sourceCodeZipCreationResult.payload.path}" }
-                // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
-                codeTransformationSession?.uploadHilPayload(sourceCodeZipCreationResult.payload)
-
-                // Add delay between upload complete and trying to resume
-                delay(500)
-
-                codeTransformationSession?.resumeTransformFromHil()
-            } else {
-                throw CodeModernizerException("Cannot create dependency zip for HIL")
-            }
-        } catch (e: Exception) {
-            LOG.error { "DEMO: unable to zip or upload source code after client side build: ${e.localizedMessage}" }
             throw e
         } finally {
-            // clean up the zip
+            // clean up the zip file
+            zipFile?.delete()
+        }
+
+        // Only upload source code if Maven build was successful. Otherwise backend will think the build was successful if there are two artifacts
+        // uploaded.
+        if (buildResult != MavenCopyCommandsResult.Failure && buildResult != MavenCopyCommandsResult.Cancelled) {
+            try {
+                val sourceCodeZipCreationResult = codeTransformationSession?.createClientBuildSourceUploadZip(clientSideBuildPath)
+                if (sourceCodeZipCreationResult?.payload?.exists() == true) {
+                    zipFile = sourceCodeZipCreationResult.payload
+                    LOG.info { "DEMO: uploading client build source code at ${sourceCodeZipCreationResult.payload.path}" }
+                    // DEMO: for client side build demo, we are using the same DEPENDENCIES upload type as HIL, so just reuse the same functions for now!
+                    codeTransformationSession?.uploadHilPayload(sourceCodeZipCreationResult.payload)
+
+                    // Add delay between upload complete and trying to resume
+                    delay(500)
+                } else {
+                    throw CodeModernizerException("Cannot create dependency zip for HIL")
+                }
+            } catch (e: Exception) {
+                LOG.error { "DEMO: unable to zip or upload source code after client side build: ${e.localizedMessage}" }
+                throw e
+            } finally {
+                // clean up the zip
+                zipFile?.delete()
+            }
+        } else {
+            LOG.info { "DEMO: skipping uploading client build source code since maven build was not successful" }
         }
     }
 

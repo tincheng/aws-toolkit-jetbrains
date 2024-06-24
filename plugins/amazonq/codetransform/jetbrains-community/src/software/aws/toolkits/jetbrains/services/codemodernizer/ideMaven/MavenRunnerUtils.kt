@@ -359,20 +359,16 @@ private fun runMavenClientBuildCommand(
     javaVersion: String,
     telemetry: CodeTransformTelemetryManager,
 ): TransformRunnable {
-    // TODO TINCHENG: figure out how to run using different Java versions
-
     // Remove Maven keyword, then split into multiple commands by whitespaces.
     // Currently, command received has one extra space after mvn.
-    val splitCommands = command.replace("mvn  ", "").replace("mvn ", "").split(" ")
-    // val jdkCommands = mutableListOf()
-    val finalCommands = mutableListOf("-Dmaven.repo.local=$tmpDestinationDir")
+    val splitCommands = command.replace("mvn ", "").split(" ")
+    val finalCommands = mutableListOf("-Dmaven.repo.local=$tmpDestinationDir -Dmaven.main.skip=true -Dmaven.test.skip=true")
     finalCommands += splitCommands
 
     val commandParams = MavenRunnerParameters(
         false,
         sourceFolder.absolutePath,
         null,
-        //listOf("-Dmaven.repo.local=$tmpDestinationDir"),
         finalCommands,
         emptyList<String>(),
         null
@@ -382,6 +378,18 @@ private fun runMavenClientBuildCommand(
         try {
             val transformMvnRunner = TransformMavenRunner(project)
             val mvnSettings = MavenRunner.getInstance(project).settings.clone()
+
+            // TODO (Post-demo): catch error if JRE version cannot be found, and ask customer (via chat) to add the JDK in project module.
+            //  The JRE names here must match available JREs in the Build Tools -> Maven -> Runner -> JRE settings
+            // Set the JRE version for the MavenRunnerSettings
+            if (javaVersion == "JAVA_8") {
+                //mvnSettings.setJreName("/Library/Java/JavaVirtualMachines/amazon-corretto-8.jdk/Contents/Home/")
+                mvnSettings.setJreName("corretto-1.8")
+            } else if (javaVersion == "JAVA_17") {
+                //mvnSettings.setJreName("/Library/Java/JavaVirtualMachines/amazon-corretto-17.jdk/Contents/Home/")
+                mvnSettings.setJreName("corretto-17")
+            }
+
             transformMvnRunner.run(commandParams, mvnSettings, transformRunnable)
         } catch (t: Throwable) {
             transformRunnable.setExitCode(Integer.MIN_VALUE) // to stop looking for the exitCode

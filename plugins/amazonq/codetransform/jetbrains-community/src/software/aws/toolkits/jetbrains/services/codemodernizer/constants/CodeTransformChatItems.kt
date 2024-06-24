@@ -458,24 +458,32 @@ fun buildClientBuildChatContent(status: String, command: String? = "", javaVersi
     // DEMO: ideally these statuses should be Enum
     var message = "None"
     if (status == "START") {
-        message = "Your job has been paused for client-side build. I'm downloading client side build instructions."
+        message = "I'm downloading new client side build instructions."
     } else if (status == "FETCHED_INSTRUCTION") {
-        message = "I'm attempting to build your project locally in a temp directory with command: `$command` and jre version `$javaVersion` "
-    } else if (status == "BUILD_COMPLETE") {
-        message = "Local build was completed. I'm uploading build log and artifact back to Q Transform."
-    } else if (status == "ARTIFACT_UPLOADED") {
-        message = "I've successfully uploaded client-side build artifacts and will be resuming your job."
+        message = "I'm attempting to build your project locally in a temp directory with command: `$command` and jdk version `$javaVersion` "
+    } else if (status == "BUILD_SUCCESS") {
+        message = "Client side build succeeded. I'm uploading local build log to Q Transform and continuing transformation."
+    } else if (status == "BUILD_FAILURE") {
+        message = "Client side build failed. I'm uploading local build log to Q Transform and continuing transformation."
     } else if (status == "FETCH_FAILED") {
         message = "Sorry, I was unable to download any client-side build instructions."
-    } else if (status == "BUILD_FAILED") {
-        message = "Sorry, client-side build for your job was not successful."
+    } else if (status == "BUILD_ERROR") {
+        message = "Sorry, client-side build for your job encountered unexpected error."
     } else if (status == "ARTIFACT_UPLOAD_FAILED") {
         message = "Sorry, I was unable to upload client-side build artifact."
     }
 
     return CodeTransformChatMessageContent(
-        type = CodeTransformChatMessageType.FinalizedAnswer,
-        message = message
+        type = if (status == "START") CodeTransformChatMessageType.PendingAnswer else CodeTransformChatMessageType.FinalizedAnswer,
+        message = message,
+        buttons = if (status == "FETCHED_INSTRUCTION") {
+            listOf(
+                openTransformHubButton,
+                stopTransformButton,
+            )
+        } else {
+            emptyList()
+        },
     )
 }
 

@@ -393,7 +393,7 @@ class CodeTransformChatController(
     }
 
     private suspend fun handleCodeTransformStoppedByUser() {
-        codeTransformChatHelper.updateLastPendingMessage(buildTransformStoppedChatContent())
+        codeTransformChatHelper.addNewMessage(buildTransformStoppedChatContent())
         codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
     }
 
@@ -401,7 +401,8 @@ class CodeTransformChatController(
         when (result) {
             is CodeModernizerJobCompletedResult.Stopped, CodeModernizerJobCompletedResult.JobAbortedBeforeStarting -> handleCodeTransformStoppedByUser()
             else -> {
-                codeTransformChatHelper.updateLastPendingMessage(
+                // DEMO: for client build, add as a new message at the end instead of updating previous message.
+                codeTransformChatHelper.addNewMessage(
                     buildTransformResultChatContent(result)
                 )
                 codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
@@ -458,43 +459,46 @@ class CodeTransformChatController(
     private suspend fun handleClientBuild() {
         // DEMO: client build
         codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("START"))
-
+        codeTransformChatHelper.chatDelayLong()
         // Get instruction and source code
         val downloadArtifact: CodeTransformClientBuildDownloadArtifact
         try {
             downloadArtifact = codeModernizerManager.getClientBuildArtifact()
-            codeTransformChatHelper.chatDelayShort()
-            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent(
+            codeTransformChatHelper.updateLastPendingMessage(buildClientBuildChatContent(
                 "FETCHED_INSTRUCTION",
                 downloadArtifact.instructions.buildCommand,
                 downloadArtifact.instructions.javaVersion))
         } catch (e: Exception) {
             logger.error { "DEMO: Unable to download any client-side build instructions" }
-            codeTransformChatHelper.chatDelayShort()
             codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("FETCH_FAILED"))
             resumeAfterClientBuild()
             return
         }
 
+        codeTransformChatHelper.chatDelayLong()
+
+        val buildResult: MavenCopyCommandsResult?
         try {
-            codeModernizerManager.handleClientSideBuild()
-            codeTransformChatHelper.chatDelayShort()
-            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_COMPLETE"))
+            buildResult = codeModernizerManager.handleClientSideBuild()
+            if (buildResult == MavenCopyCommandsResult.Failure) {
+                codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_FAILURE"))
+            } else {
+                codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_SUCCESS"))
+            }
         } catch (e: Exception) {
+            // This is if some error prevents client side build from happening, not representative to the status of maven build.
             logger.error { "DEMO: client-side build for your job was not successful due to $e" }
-            codeTransformChatHelper.chatDelayShort()
-            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_FAILED"))
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_ERROR"))
             resumeAfterClientBuild()
             return
         }
 
+        codeTransformChatHelper.chatDelayLong()
+
         try {
-            codeModernizerManager.uploadClientSideBuildArtifact(downloadArtifact.outputDirPath)
-            codeTransformChatHelper.chatDelayShort()
-            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("ARTIFACT_UPLOADED"))
+            codeModernizerManager.uploadClientSideBuildArtifact(downloadArtifact.outputDirPath, buildResult)
         } catch (e: Exception) {
             logger.error { "DEMO: Unable to upload client-side build artifact due to $e" }
-            codeTransformChatHelper.chatDelayShort()
             codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("ARTIFACT_UPLOAD_FAILED"))
             resumeAfterClientBuild()
             return
