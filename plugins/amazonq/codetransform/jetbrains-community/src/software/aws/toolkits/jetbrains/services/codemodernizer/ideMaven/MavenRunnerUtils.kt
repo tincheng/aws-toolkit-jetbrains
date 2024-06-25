@@ -4,6 +4,7 @@
 package software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven
 
 import com.intellij.openapi.application.runInEdt
+import com.intellij.openapi.application.runReadAction
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.changes.patch.ApplyPatchDefaultExecutor
 import com.intellij.openapi.vcs.changes.patch.ApplyPatchDifferentiatedDialog
@@ -383,10 +384,8 @@ private fun runMavenClientBuildCommand(
             //  The JRE names here must match available JREs in the Build Tools -> Maven -> Runner -> JRE settings
             // Set the JRE version for the MavenRunnerSettings
             if (javaVersion == "JAVA_8") {
-                //mvnSettings.setJreName("/Library/Java/JavaVirtualMachines/amazon-corretto-8.jdk/Contents/Home/")
                 mvnSettings.setJreName("corretto-1.8")
             } else if (javaVersion == "JAVA_17") {
-                //mvnSettings.setJreName("/Library/Java/JavaVirtualMachines/amazon-corretto-17.jdk/Contents/Home/")
                 mvnSettings.setJreName("corretto-17")
             }
 

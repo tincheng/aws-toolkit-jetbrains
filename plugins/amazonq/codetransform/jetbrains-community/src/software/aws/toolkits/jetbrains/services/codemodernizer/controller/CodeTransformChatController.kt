@@ -221,8 +221,9 @@ class CodeTransformChatController(
             codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
             return
         } else if (mavenBuildResult == MavenCopyCommandsResult.Failure) {
-            codeTransformChatHelper.updateLastPendingMessage(buildCompileLocalFailedChatContent())
-            codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
+            // DEMO: temporarily disable chat message for maven build failure since client side build can fail intentionally.
+            //codeTransformChatHelper.updateLastPendingMessage(buildCompileLocalFailedChatContent())
+            //codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
             return
         }
 
@@ -481,9 +482,15 @@ class CodeTransformChatController(
         try {
             buildResult = codeModernizerManager.handleClientSideBuild()
             if (buildResult == MavenCopyCommandsResult.Failure) {
-                codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_FAILURE"))
+                codeTransformChatHelper.updateLastPendingMessage(buildClientBuildChatContent(
+                    "BUILD_FAILURE",
+                    downloadArtifact.instructions.buildCommand,
+                    downloadArtifact.instructions.javaVersion))
             } else {
-                codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_SUCCESS"))
+                codeTransformChatHelper.updateLastPendingMessage(buildClientBuildChatContent(
+                    "BUILD_SUCCESS",
+                    downloadArtifact.instructions.buildCommand,
+                    downloadArtifact.instructions.javaVersion))
             }
         } catch (e: Exception) {
             // This is if some error prevents client side build from happening, not representative to the status of maven build.

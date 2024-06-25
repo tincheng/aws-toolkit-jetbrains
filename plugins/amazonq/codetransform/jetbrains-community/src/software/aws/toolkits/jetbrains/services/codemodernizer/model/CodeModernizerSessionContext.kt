@@ -16,9 +16,6 @@ import software.aws.toolkits.core.utils.error
 import software.aws.toolkits.core.utils.getLogger
 import software.aws.toolkits.core.utils.info
 import software.aws.toolkits.core.utils.putNextEntry
-import software.aws.toolkits.core.utils.warn
-import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerSession
-import software.aws.toolkits.jetbrains.services.codemodernizer.CodeModernizerSession.Companion
 import software.aws.toolkits.jetbrains.services.codemodernizer.CodeTransformTelemetryManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_ARTIFACT_DIR_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_DEPENDENCIES_ROOT_NAME
@@ -206,13 +203,6 @@ data class CodeModernizerSessionContext(
             } catch (e: Exception) {
                 LOG.error(e) { e.message.toString() }
                 throw CodeModernizerException("Unknown exception occurred")
-            } finally {
-                // clean up the temp folder
-                val transformBuildLogDir = tempPath.resolve("transform_build_log")
-                val directory = File(transformBuildLogDir.pathString)
-                if (!directory.deleteRecursively()) {
-                    println("DEMO: Failed to delete transform_build_log directory.")
-                }
             }
         }
 

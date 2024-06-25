@@ -462,9 +462,9 @@ fun buildClientBuildChatContent(status: String, command: String? = "", javaVersi
     } else if (status == "FETCHED_INSTRUCTION") {
         message = "I'm attempting to build your project locally in a temp directory with command: `$command` and jdk version `$javaVersion` "
     } else if (status == "BUILD_SUCCESS") {
-        message = "Client side build succeeded. I'm uploading local build log to Q Transform and continuing transformation."
+        message = "Client side build succeeded for command: `$command` and jdk version `$javaVersion`. I'm uploading local build log to Q Transform."
     } else if (status == "BUILD_FAILURE") {
-        message = "Client side build failed. I'm uploading local build log to Q Transform and continuing transformation."
+        message = "Client side build failed for command: `$command` and jdk version `$javaVersion`. I'm uploading local build log to Q Transform."
     } else if (status == "FETCH_FAILED") {
         message = "Sorry, I was unable to download any client-side build instructions."
     } else if (status == "BUILD_ERROR") {
@@ -474,9 +474,9 @@ fun buildClientBuildChatContent(status: String, command: String? = "", javaVersi
     }
 
     return CodeTransformChatMessageContent(
-        type = if (status == "START") CodeTransformChatMessageType.PendingAnswer else CodeTransformChatMessageType.FinalizedAnswer,
+        type = if (status == "START" || status == "FETCHED_INSTRUCTION") CodeTransformChatMessageType.PendingAnswer else CodeTransformChatMessageType.FinalizedAnswer,
         message = message,
-        buttons = if (status == "FETCHED_INSTRUCTION") {
+        buttons = if (status == "FETCHED_INSTRUCTION" || status == "BUILD_SUCCESS" || status == "BUILD_FAILURE") {
             listOf(
                 openTransformHubButton,
                 stopTransformButton,
