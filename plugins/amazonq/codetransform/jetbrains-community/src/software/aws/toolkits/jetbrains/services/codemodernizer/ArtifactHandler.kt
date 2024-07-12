@@ -30,6 +30,7 @@ import software.aws.toolkits.jetbrains.services.amazonq.CODE_TRANSFORM_TROUBLESH
 import software.aws.toolkits.jetbrains.services.codemodernizer.client.GumbyClient
 import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTransformMessageListener
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerArtifact
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformFailureBuildLog
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.DownloadArtifactResult
@@ -109,6 +110,16 @@ class ArtifactHandler(private val project: Project, private val clientAdaptor: G
             LOG.error { errorMessage }
             null
         }
+    }
+
+    suspend fun downloadClientBuildArtifact(jobId: JobId, artifactId: String, tmpDir: File): CodeTransformClientBuildDownloadArtifact {
+        val downloadResultsResponse = clientAdaptor.downloadExportResultArchive(jobId, artifactId)
+
+        val tmpPath = tmpDir.toPath()
+        val (downloadZipFilePath, _) = unzipToPath(downloadResultsResponse, tmpPath)
+        LOG.info { "Successfully converted the client build instruction downloaded to a zip at ${downloadZipFilePath.toAbsolutePath()}." }
+        // DEMO: TODO: for demo purpose, just use the same HIL artifact DIR name "q-hil-dependency-artifacts"
+        return CodeTransformClientBuildDownloadArtifact.create(downloadZipFilePath, getPathToHilArtifactDir(tmpPath))
     }
 
     /**

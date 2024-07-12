@@ -26,8 +26,8 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTran
 import software.aws.toolkits.jetbrains.services.codemodernizer.commands.CodeTransformCommand
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.FEATURE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCheckingValidProjectChatContent
+import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildClientBuildChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileHilAlternativeVersionContent
-import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalFailedChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalInProgressChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildCompileLocalSuccessChatContent
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.buildDownloadFailureChatContent
@@ -59,6 +59,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.messages.CodeTran
 import software.aws.toolkits.jetbrains.services.codemodernizer.messages.CodeTransformCommandMessage
 import software.aws.toolkits.jetbrains.services.codemodernizer.messages.IncomingCodeTransformMessage
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerJobCompletedResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CustomerSelection
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.DownloadFailureReason
@@ -222,8 +223,9 @@ class CodeTransformChatController(
             codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
             return
         } else if (mavenBuildResult == MavenCopyCommandsResult.Failure) {
-            codeTransformChatHelper.updateLastPendingMessage(buildCompileLocalFailedChatContent())
-            codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
+            // DEMO: TODO: temporarily disable chat message for maven build failure since client side build can fail intentionally.
+            //codeTransformChatHelper.updateLastPendingMessage(buildCompileLocalFailedChatContent())
+            //codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
             return
         }
 
@@ -357,6 +359,7 @@ class CodeTransformChatController(
             CodeTransformCommand.AuthRestored -> handleAuthRestored()
             CodeTransformCommand.ReauthStarted -> handleReauthStarted(activeTabId)
             CodeTransformCommand.CheckAuth -> handleCheckAuth(activeTabId)
+            CodeTransformCommand.ClientBuildStarted -> handleClientBuild()
             CodeTransformCommand.DownloadFailed -> {
                 val result = message.downloadFailure
                 if (result != null) {
@@ -435,7 +438,9 @@ class CodeTransformChatController(
     }
 
     private suspend fun handleCodeTransformStoppedByUser() {
-        codeTransformChatHelper.updateLastPendingMessage(buildTransformStoppedChatContent())
+        // DEMO: TODO:
+        //codeTransformChatHelper.updateLastPendingMessage(buildTransformStoppedChatContent())
+        codeTransformChatHelper.addNewMessage(buildTransformStoppedChatContent())
         codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
     }
 
@@ -446,13 +451,92 @@ class CodeTransformChatController(
                 if (result is CodeModernizerJobCompletedResult.ZipUploadFailed && result.failureReason is UploadFailureReason.CREDENTIALS_EXPIRED) {
                     return
                 } else {
-                    codeTransformChatHelper.updateLastPendingMessage(
+                    // DEMO: for client build, add as a new message at the end instead of updating previous message.
+                    codeTransformChatHelper.addNewMessage(
+                    //codeTransformChatHelper.updateLastPendingMessage(
                         buildTransformResultChatContent(result)
                     )
                     codeTransformChatHelper.addNewMessage(buildStartNewTransformFollowup())
                 }
             }
         }
+    }
+
+    private suspend fun resumeAfterClientBuild() {
+        try {
+            codeModernizerManager.tryResumeAfterClientBuild()
+
+            // TODO: is this needed?
+            runInEdt {
+                codeModernizerManager.getBottomToolWindow().show()
+            }
+
+            codeTransformChatHelper.chatDelayLong()
+            // Add delay between resume complete and trying to poll again
+            delay(1000)
+
+            codeModernizerManager.resumePolling()
+        } catch (e: Exception) {
+            logger.error { "Encountered error when trying to resume: ${e.localizedMessage}" }
+            codeTransformChatHelper.updateLastPendingMessage(buildHilCannotResumeContent())
+        }
+    }
+
+    private suspend fun handleClientBuild() {
+        codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("START"))
+        codeTransformChatHelper.chatDelayLong()
+
+        // Download instruction and updated source code
+        val downloadArtifact: CodeTransformClientBuildDownloadArtifact
+        try {
+            downloadArtifact = codeModernizerManager.getClientBuildArtifact()
+            codeTransformChatHelper.updateLastPendingMessage(buildClientBuildChatContent(
+                "FETCHED_INSTRUCTION",
+                downloadArtifact.instructions.buildCommand,
+                downloadArtifact.instructions.javaVersion))
+        } catch (e: Exception) {
+            logger.error { "Unable to download any client-side build instructions" }
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("FETCH_FAILED"))
+            resumeAfterClientBuild()
+            return
+        }
+
+        codeTransformChatHelper.chatDelayLong()
+
+        val buildResult: MavenCopyCommandsResult?
+        try {
+            buildResult = codeModernizerManager.handleClientSideBuild()
+            if (buildResult == MavenCopyCommandsResult.Failure) {
+                codeTransformChatHelper.updateLastPendingMessage(buildClientBuildChatContent(
+                    "BUILD_FAILURE",
+                    downloadArtifact.instructions.buildCommand,
+                    downloadArtifact.instructions.javaVersion))
+            } else {
+                codeTransformChatHelper.updateLastPendingMessage(buildClientBuildChatContent(
+                    "BUILD_SUCCESS",
+                    downloadArtifact.instructions.buildCommand,
+                    downloadArtifact.instructions.javaVersion))
+            }
+        } catch (e: Exception) {
+            // This is if some error prevents client side build from happening, not representative to the status of maven build.
+            logger.error { "Client build failed due to $e" }
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("BUILD_ERROR"))
+            resumeAfterClientBuild()
+            return
+        }
+
+        codeTransformChatHelper.chatDelayLong()
+
+        try {
+            codeModernizerManager.uploadClientSideBuildArtifact(downloadArtifact.outputDirPath, buildResult)
+        } catch (e: Exception) {
+            logger.error { "Unable to upload client build artifact" }
+            codeTransformChatHelper.addNewMessage(buildClientBuildChatContent("ARTIFACT_UPLOAD_FAILED"))
+            resumeAfterClientBuild()
+            return
+        }
+
+        resumeAfterClientBuild()
     }
 
     private suspend fun hilTryResumeAfterError(errorMessage: String) {
@@ -467,7 +551,7 @@ class CodeTransformChatController(
 
             codeTransformChatHelper.chatDelayLong()
 
-            codeModernizerManager.resumePollingFromHil()
+            codeModernizerManager.resumePolling()
         } catch (e: Exception) {
             telemetry.logHil(
                 CodeModernizerSessionState.getInstance(context.project).currentJobId?.id.orEmpty(),
@@ -578,7 +662,7 @@ class CodeTransformChatController(
             runInEdt {
                 codeModernizerManager.getBottomToolWindow().show()
             }
-            codeModernizerManager.resumePollingFromHil()
+            codeModernizerManager.resumePolling()
         } catch (e: Exception) {
             hilTryResumeAfterError(message("codemodernizer.chat.message.hil.error.cannot_upload"))
         }
@@ -608,7 +692,7 @@ class CodeTransformChatController(
             runInEdt {
                 codeModernizerManager.getBottomToolWindow().show()
             }
-            codeModernizerManager.resumePollingFromHil()
+            codeModernizerManager.resumePolling()
         } catch (e: Exception) {
             telemetry.logHil(
                 CodeModernizerSessionState.getInstance(context.project).currentJobId?.id.orEmpty(),

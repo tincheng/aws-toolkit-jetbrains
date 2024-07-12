@@ -17,13 +17,17 @@ import software.aws.toolkits.core.utils.getLogger
 import software.aws.toolkits.core.utils.info
 import software.aws.toolkits.core.utils.putNextEntry
 import software.aws.toolkits.jetbrains.services.codemodernizer.CodeTransformTelemetryManager
+import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_ARTIFACT_DIR_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_DEPENDENCIES_ROOT_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.constants.HIL_MANIFEST_FILE_NAME
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runDependencyReportCommands
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runHilMavenCopyDependency
+import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runMavenClientBuild
 import software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven.runMavenCopyCommands
 import software.aws.toolkits.jetbrains.services.codemodernizer.panels.managers.CodeModernizerBottomWindowPanelManager
 import software.aws.toolkits.jetbrains.services.codemodernizer.toolwindow.CodeModernizerBottomToolWindowFactory
+import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToClientBuildLogUploadZip
+import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToClientBuildSourceUploadZip
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToHilArtifactPomFolder
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToHilDependenciesRootDir
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getPathToHilUploadZip
@@ -36,6 +40,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.io.path.Path
 import kotlin.io.path.pathString
@@ -92,6 +97,9 @@ data class CodeModernizerSessionContext(
         LOG,
         project
     )
+
+    fun executeMavenClientBuildCommand(sourceFolder: File, command: String, javaVersion: String) =
+        runMavenClientBuild(sourceFolder, LOG, project, command, javaVersion)
 
     fun copyHilDependencyUsingMaven(hilTepDirPath: Path): MavenCopyCommandsResult {
         val sourceFolder = File(getPathToHilArtifactPomFolder(hilTepDirPath).pathString)
@@ -166,6 +174,70 @@ data class CodeModernizerSessionContext(
                 }
 
                 ZipCreationResult.Succeeded(file.toFile())
+            } catch (e: Exception) {
+                LOG.error(e) { e.message.toString() }
+                throw CodeModernizerException("Unknown exception occurred")
+            }
+        }
+
+    fun createZipForClientSideBuildLog(tempPath: Path): ZipCreationResult =
+        runReadAction {
+            try {
+                val buildLogFilePath = tempPath.resolve("buildCommandOutput.log")
+                val buildLogFile = File(buildLogFilePath.pathString)
+                if (!buildLogFile.exists()) {
+                    throw CodeModernizerException(
+                        "buildCommandOutput.log does not exist in the current directory: $buildLogFilePath, file: $buildLogFile"
+                    )
+                }
+
+                // zip the file as is without moving into any folder
+                val zipFile = Files.createFile(getPathToClientBuildLogUploadZip(tempPath))
+                ZipOutputStream(Files.newOutputStream(zipFile)).use { zip ->
+                    val zipEntry = ZipEntry("buildCommandOutput.log")
+                    zip.putNextEntry(zipEntry)
+                    Files.copy(buildLogFilePath, zip)
+                    zip.closeEntry()
+                }
+
+                ZipCreationResult.Succeeded(zipFile.toFile())
+            } catch (e: Exception) {
+                LOG.error(e) { e.message.toString() }
+                throw CodeModernizerException("Unknown exception occurred")
+            }
+        }
+
+    fun createZipForClientSideSourceCode(tempPath: Path): ZipCreationResult =
+    // re-upload the tmp directory. No need to add manifest file or dependencies.
+        // Leaving the initial instructions.json in there should be okay.
+        runReadAction {
+            try {
+                // the temp folder containing downloaded client side build artifact
+                val rootDirectory = File(tempPath.pathString)
+
+                val rootFiles = iterateThroughDependencies(rootDirectory)
+
+                // q-hil-dependency-artifacts
+                val rootFolder = File(HIL_ARTIFACT_DIR_NAME)
+
+                val zipFile = Files.createFile(getPathToClientBuildSourceUploadZip(tempPath))
+                ZipOutputStream(Files.newOutputStream(zipFile)).use { zip ->
+                    // Source codes
+                    rootFiles.forEach { depFile ->
+                        val relativePath = File(depFile.path).relativeTo(rootDirectory)
+                        val paddedPath = rootFolder.resolve(relativePath)
+                        var paddedPathString = paddedPath.toPath().toString()
+                        // Convert Windows file path to work on Linux
+                        if (File.separatorChar != '/') {
+                            paddedPathString = paddedPathString.replace('\\', '/')
+                        }
+                        depFile.inputStream().use {
+                            zip.putNextEntry(paddedPathString, it)
+                        }
+                    }
+                }
+
+                ZipCreationResult.Succeeded(zipFile.toFile())
             } catch (e: Exception) {
                 LOG.error(e) { e.message.toString() }
                 throw CodeModernizerException("Unknown exception occurred")

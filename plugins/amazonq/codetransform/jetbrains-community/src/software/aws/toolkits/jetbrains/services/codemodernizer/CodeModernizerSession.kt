@@ -15,7 +15,6 @@ import software.amazon.awssdk.services.codewhispererruntime.model.StartTransform
 import software.amazon.awssdk.services.codewhispererruntime.model.TransformationJob
 import software.amazon.awssdk.services.codewhispererruntime.model.TransformationLanguage
 import software.amazon.awssdk.services.codewhispererruntime.model.TransformationPlan
-import software.amazon.awssdk.services.codewhispererruntime.model.TransformationProgressUpdateStatus
 import software.amazon.awssdk.services.codewhispererruntime.model.TransformationStatus
 import software.amazon.awssdk.services.codewhispererruntime.model.TransformationUserActionStatus
 import software.amazon.awssdk.services.codewhispererstreaming.model.TransformationDownloadArtifactType
@@ -31,6 +30,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModerni
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerJobCompletedResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerSessionContext
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerStartJobResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.DownloadArtifactResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.JobId
@@ -40,6 +40,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.UploadFailu
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.ZipCreationResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.plan.CodeModernizerPlanEditorProvider
 import software.aws.toolkits.jetbrains.services.codemodernizer.state.CodeModernizerSessionState
+import software.aws.toolkits.jetbrains.services.codemodernizer.utils.PollingResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.STATES_AFTER_INITIAL_BUILD
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.STATES_AFTER_STARTED
 import software.aws.toolkits.jetbrains.services.codemodernizer.utils.getModuleOrProjectNameForFile
@@ -91,6 +92,8 @@ class CodeModernizerSession(
     private var hilTempDirectoryPath: Path? = null
     private var hilDownloadArtifact: CodeTransformHilDownloadArtifact? = null
 
+    private var clientBuildArtifact: CodeTransformClientBuildDownloadArtifact? = null
+
     fun getHilDownloadArtifactId() = hilDownloadArtifactId
 
     fun setHilDownloadArtifactId(artifactId: String) {
@@ -108,6 +111,13 @@ class CodeModernizerSession(
     fun setHilTempDirectoryPath(path: Path) {
         hilTempDirectoryPath = path
     }
+
+    fun getClientBuildArtifact() = clientBuildArtifact
+
+    fun setClientBuildArtifact(artifact: CodeTransformClientBuildDownloadArtifact) {
+        clientBuildArtifact = artifact
+    }
+
     fun getLastMvnBuildResult(): MavenCopyCommandsResult? = mvnBuildResult
 
     fun setLastMvnBuildResult(result: MavenCopyCommandsResult) {
@@ -133,6 +143,10 @@ class CodeModernizerSession(
         hilDownloadArtifact?.manifest,
         selectedVersion
     )
+
+    fun createClientBuildLogUploadZip(tempPath: Path) = sessionContext.createZipForClientSideBuildLog(tempPath)
+
+    fun createClientBuildSourceUploadZip(tempPath: Path) = sessionContext.createZipForClientSideSourceCode(tempPath)
 
     /**
      * Note that this function makes network calls and needs to be run from a background thread.
@@ -297,17 +311,12 @@ class CodeModernizerSession(
         return clientAdaptor.getCodeModernizationJob(jobId.id).transformationJob()
     }
 
-    fun getTransformPlanDetails(jobId: JobId): TransformationPlan {
-        LOG.info { "Getting transform plan details." }
-        return clientAdaptor.getCodeModernizationPlan(jobId).transformationPlan()
-    }
-
     /**
      * This will resume the job, i.e. it will resume the main job loop kicked of by [createModernizationJob]
      */
     fun resumeJob(startTime: Instant, jobId: JobId) = state.putJobHistory(sessionContext, TransformationStatus.STARTED, jobId.id, startTime)
 
-    fun resumeTransformFromHil() {
+    fun resumeTransform() {
         val clientAdaptor = GumbyClient.getInstance(sessionContext.project)
         clientAdaptor.resumeCodeTransformation(state.currentJobId as JobId, TransformationUserActionStatus.COMPLETED)
     }
@@ -357,6 +366,50 @@ class CodeModernizerSession(
                 createUploadUrlResponse.responseMetadata().requestId(),
             )
             LOG.warn { "Upload hil artifact complete" }
+        }
+        return createUploadUrlResponse.uploadId()
+    }
+
+    // TODO: This is near identical to the above HIL function. Refactor.
+    fun uploadClientBuildPayload(payload: File): String {
+        val sha256checksum: String = Base64.getEncoder().encodeToString(DigestUtils.sha256(FileInputStream(payload)))
+        if (isDisposed.get()) {
+            throw AlreadyDisposedException("Disposed when about to create upload URL")
+        }
+        val jobId = state.currentJobId ?: throw CodeModernizerException("No Job ID found")
+        val clientAdaptor = GumbyClient.getInstance(sessionContext.project)
+        val createUploadUrlResponse = clientAdaptor.createClientBuildUploadUrl(sha256checksum, jobId = jobId)
+
+        LOG.info {
+            "Uploading client build artifact with checksum $sha256checksum using uploadId: ${
+                createUploadUrlResponse.uploadId()
+            } and size ${(payload.length() / 1000).toInt()}kB"
+        }
+        if (isDisposed.get()) {
+            throw AlreadyDisposedException("Disposed when about to upload client build artifact to s3")
+        }
+        val uploadStartTime = Instant.now()
+        try {
+            clientAdaptor.uploadArtifactToS3(
+                createUploadUrlResponse.uploadUrl(),
+                payload,
+                sha256checksum,
+                createUploadUrlResponse.kmsKeyArn().orEmpty(),
+            ) { shouldStop.get() }
+        } catch (e: Exception) {
+            val errorMessage = "Unexpected error when uploading client build artifact to S3: ${e.localizedMessage}"
+            LOG.error { errorMessage }
+            telemetry.apiError(errorMessage, CodeTransformApiNames.UploadZip, createUploadUrlResponse.uploadId())
+            throw e
+        }
+        if (!shouldStop.get()) {
+            telemetry.logApiLatency(
+                CodeTransformApiNames.UploadZip,
+                uploadStartTime,
+                payload.length().toInt(),
+                createUploadUrlResponse.responseMetadata().requestId(),
+            )
+            LOG.warn { "Upload client build artifact complete" }
         }
         return createUploadUrlResponse.uploadId()
     }
@@ -421,7 +474,7 @@ class CodeModernizerSession(
             var passedBuild = false
             var passedStart = false
 
-            val result = jobId.pollTransformationStatusAndPlan(
+            val result: PollingResult = jobId.pollTransformationStatusAndPlan(
                 succeedOn = setOf(
                     TransformationStatus.COMPLETED,
                     TransformationStatus.PAUSED,
@@ -437,20 +490,24 @@ class CodeModernizerSession(
                 totalPollingSleepDurationMillis,
                 isDisposed,
                 sessionContext.project,
-            ) { old, new, plan ->
+                // DEMO: TODO: this "reason" is temporarily being overloaded with client build artifact. Pending backend design for final solution.
+            ) { old, new, plan, reason ->
                 // Always refresh the dev tool tree so status will be up-to-date
                 state.currentJobStatus = new
                 state.transformationPlan = plan
 
                 if (state.currentJobStatus == TransformationStatus.PAUSED) {
-                    val pausedUpdate =
-                        state.transformationPlan
-                            ?.transformationSteps()
-                            ?.flatMap { step -> step.progressUpdates() }
-                            ?.filter { update -> update.status() == TransformationProgressUpdateStatus.PAUSED }
-                    if (pausedUpdate?.isNotEmpty() == true) {
-                        state.currentHilArtifactId = pausedUpdate[0].downloadArtifacts()[0].downloadArtifactId()
-                    }
+                    // DEMO: TODO: client build
+                    LOG.info { "DEMO: Setting current Instruction Id from FailureReason: $reason" }
+                    state.currentClientBuildArtifactId = reason
+//                    val pausedUpdate =
+//                        state.transformationPlan
+//                            ?.transformationSteps()
+//                            ?.flatMap { step -> step.progressUpdates() }
+//                            ?.filter { update -> update.status() == TransformationProgressUpdateStatus.PAUSED }
+//                    if (pausedUpdate?.isNotEmpty() == true) {
+//                        state.currentHilArtifactId = pausedUpdate[0].downloadArtifacts()[0].downloadArtifactId()
+//                    }
                 }
 
                 // Open the transformation plan detail panel once transformation plan is available
@@ -481,6 +538,11 @@ class CodeModernizerSession(
                 result.state == TransformationStatus.STOPPED -> CodeModernizerJobCompletedResult.Stopped
 
                 result.state == TransformationStatus.PAUSED -> CodeModernizerJobCompletedResult.JobPaused(jobId, state.currentHilArtifactId.orEmpty())
+
+                result.state == TransformationStatus.CLIENT_BUILDING -> CodeModernizerJobCompletedResult.JobPaused(
+                    jobId,
+                    state.currentClientBuildArtifactId.orEmpty(),
+                )
 
                 result.state == TransformationStatus.UNKNOWN_TO_SDK_VERSION -> CodeModernizerJobCompletedResult.JobFailed(
                     jobId,
@@ -624,4 +686,6 @@ class CodeModernizerSession(
             }
         }
     }
+
+    fun getClientBuildArtifactId() = state.currentClientBuildArtifactId
 }

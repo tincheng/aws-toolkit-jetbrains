@@ -13,7 +13,9 @@ sealed class CodeModernizerJobCompletedResult {
     data class JobCompletedSuccessfully(val jobId: JobId) : CodeModernizerJobCompletedResult()
     data class JobPartiallySucceeded(val jobId: JobId, val targetJavaVersion: JavaSdkVersion) : CodeModernizerJobCompletedResult()
 
+    // TODO: JobPaused/ClientBuilding don't quite fit the definition of "JobCompletedResult". See if we can refactor these or rename the class
     data class JobPaused(val jobId: JobId, val downloadArtifactId: String) : CodeModernizerJobCompletedResult()
+    data class ClientBuilding(val jobId: JobId, val clientBuildArtifactId: String) : CodeModernizerJobCompletedResult()
 
     data class JobFailedInitialBuild(val jobId: JobId, val failureReason: String, val hasBuildLog: Boolean) : CodeModernizerJobCompletedResult()
     object ManagerDisposed : CodeModernizerJobCompletedResult()

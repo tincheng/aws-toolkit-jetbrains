@@ -35,6 +35,7 @@ val STATES_AFTER_INITIAL_BUILD = setOf(
 val STATES_AFTER_STARTED = setOf(
     TransformationStatus.STARTED,
     TransformationStatus.PREPARING,
+    TransformationStatus.CLIENT_BUILDING,
     *STATES_AFTER_INITIAL_BUILD.toTypedArray(),
 )
 

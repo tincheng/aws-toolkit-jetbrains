@@ -194,8 +194,10 @@ class CodeModernizerBottomWindowPanelManager(private val project: Project) : JPa
                 is CodeModernizerJobCompletedResult.ManagerDisposed -> return@setUI
 
                 is CodeModernizerJobCompletedResult.JobPaused,
+                is CodeModernizerJobCompletedResult.ClientBuilding,
                 is CodeModernizerJobCompletedResult.Stopped,
                 is CodeModernizerJobCompletedResult.JobAbortedBeforeStarting -> userInitiatedStopCodeModernizationUI()
+
             }
         }
     }

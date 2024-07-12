@@ -22,3 +22,7 @@ const val HIL_DEPENDENCY_ROOT_DIR_NAME = "dependencies-root"
 const val HIL_DEPENDENCIES_ROOT_NAME = "dependenciesRoot"
 
 const val HIL_UPLOAD_ZIP_NAME = "hilUpload.zip"
+
+const val CLIENT_BUILD_UPLOAD_LOG_ZIP_NAME = "clientBuildLogUpload.zip"
+
+const val CLIENT_BUILD_UPLOAD_SOURCE_ZIP_NAME = "clientBuildSourceUpload.zip"

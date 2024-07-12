@@ -5,6 +5,7 @@ package software.aws.toolkits.jetbrains.services.codemodernizer.ideMaven
 
 import com.intellij.openapi.application.runInEdt
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.projectRoots.ProjectJdkTable
 import org.jetbrains.idea.maven.execution.MavenRunner
 import org.jetbrains.idea.maven.execution.MavenRunnerParameters
 import org.jetbrains.idea.maven.execution.MavenRunnerSettings
@@ -18,6 +19,7 @@ import software.aws.toolkits.telemetry.CodeTransformMavenBuildCommand
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Path
+
 
 private fun emitMavenFailure(error: String, logger: Logger, telemetry: CodeTransformTelemetryManager, throwable: Throwable? = null) {
     if (throwable != null) logger.error(throwable) { error } else logger.error { error }
@@ -286,4 +288,103 @@ fun runDependencyReportCommands(sourceFolder: File, buildlogBuilder: StringBuild
     }
 
     return MavenDependencyReportCommandsResult.Success
+}
+
+fun runMavenClientBuild(
+    sourceFolder: File, logger: Logger, project: Project, command: String, javaVersion: String
+): MavenCopyCommandsResult {
+    val telemetry = CodeTransformTelemetryManager.getInstance(project)
+
+    val currentTimestamp = System.currentTimeMillis()
+    val tmpDestinationDir = Files.createTempDirectory("transformation_client_build_$currentTimestamp")
+
+    logger.info { "Created temp directory $tmpDestinationDir for local build" }
+
+    val runnable = runMavenClientBuildCommand(sourceFolder, tmpDestinationDir, logger, project, command, javaVersion, telemetry)
+    runnable.await()
+    if (runnable.isComplete()) {
+        logger.info { "IntelliJ bundled Maven executed successfully" }
+    } else if (runnable.isTerminated()) {
+        return MavenCopyCommandsResult.Cancelled
+    } else {
+        emitMavenFailure("Bundled Maven failed: exitCode ${runnable.isComplete()}", logger, telemetry)
+        return MavenCopyCommandsResult.Failure
+    }
+    // When all commands executed successfully, show the transformation hub
+    return MavenCopyCommandsResult.Success(tmpDestinationDir.toFile())
+}
+
+private fun runMavenClientBuildCommand(
+    sourceFolder: File,
+    tmpDestinationDir: Path,
+    logger: Logger,
+    project: Project,
+    command: String,
+    javaVersion: String,
+    telemetry: CodeTransformTelemetryManager,
+): TransformRunnable {
+    // Currently backend provide full maven commands like "mvn clean verify", but maven runner commands need to be separated.
+    // Remove Maven keyword, then split into multiple commands by whitespaces.
+    val splitCommands = command.replace("mvn ", "").split(" ")
+    val finalCommands = mutableListOf("-Dmaven.repo.local=$tmpDestinationDir -Dmaven.main.skip=true -Dmaven.test.skip=true")
+    finalCommands += splitCommands
+
+    val commandParams = MavenRunnerParameters(
+        false,
+        sourceFolder.absolutePath,
+        null,
+        finalCommands,
+        emptyList<String>(),
+        null
+    )
+    val transformRunnable = TransformRunnable()
+    runInEdt {
+        try {
+            val transformMvnRunner = TransformMavenRunner(project)
+            val mvnSettings = MavenRunner.getInstance(project).settings.clone()
+
+            // Set the JRE version for the MavenRunnerSettings
+            val jdk: Pair<String, String>? = getJdkName(getJavaVersion(javaVersion))
+            if (jdk != null) {
+                mvnSettings.setJreName(jdk.first)
+                logger.info { "Running client side build with JRE: ${jdk.second}" }
+            } else {
+                // DEMO: TODO: create specific exception type to trigger chat message
+                throw Exception("Unable to find Java 8 JRE")
+            }
+
+            transformMvnRunner.run(commandParams, mvnSettings, transformRunnable)
+        } catch (t: Throwable) {
+            val error = "Maven: Unexpected error when executing Maven in client side build"
+            transformRunnable.setExitCode(Integer.MIN_VALUE) // to stop looking for the exitCode
+            logger.info(t) { error }
+            telemetry.mvnBuildFailed(CodeTransformMavenBuildCommand.IDEBundledMaven, error)
+        }
+    }
+    return transformRunnable
+}
+
+// Example jdk name and versionString:
+//      1.8 -> java version "1.8.0_412"
+//      corretto-1.8 -> java version "1.8.0_412"
+//      corretto-17 -> Amazon Corretto 17.0.11 - aarch64
+private fun getJdkName(javaVersion: String): Pair<String, String>? {
+    val jdkTable = ProjectJdkTable.getInstance()
+    for(jdk in jdkTable.allJdks) {
+        val jdkName = jdk.name
+        val jdkVersion = jdk.versionString.orEmpty()
+        if (jdkName.isNotEmpty() && jdkName.contains(javaVersion)) {
+            return jdkName to jdkVersion
+        }
+    }
+    return null
+}
+
+private fun getJavaVersion(javaVersion: String): String {
+    return when (javaVersion) {
+        "JAVA_8" -> "1.8"
+        "JAVA_11" -> "11"
+        "JAVA_17" -> "17"
+        else -> throw IllegalArgumentException("Invalid Java version: $javaVersion")
+    }
 }

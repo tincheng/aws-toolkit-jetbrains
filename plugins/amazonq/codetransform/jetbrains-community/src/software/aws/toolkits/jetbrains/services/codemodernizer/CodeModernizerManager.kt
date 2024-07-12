@@ -40,6 +40,7 @@ import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModerni
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerJobCompletedResult
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerSessionContext
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeModernizerStartJobResult
+import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformClientBuildDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CodeTransformHilDownloadArtifact
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.CustomerSelection
 import software.aws.toolkits.jetbrains.services.codemodernizer.model.Dependency
@@ -240,8 +241,8 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         launchModernizationJob(session, copyResult)
     }
 
-    suspend fun resumePollingFromHil() {
-        val result = handleJobResumedFromHil(managerState.getLatestJobId(), codeTransformationSession as CodeModernizerSession)
+    suspend fun resumePolling() {
+        val result = handleJobResumed(managerState.getLatestJobId(), codeTransformationSession as CodeModernizerSession)
         postModernizationJob(result)
     }
 
@@ -421,7 +422,7 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
             }
         }
 
-    private suspend fun handleJobResumedFromHil(
+    private suspend fun handleJobResumed(
         jobId: JobId,
         session: CodeModernizerSession
     ): CodeModernizerJobCompletedResult = session.pollUntilJobCompletion(
@@ -452,9 +453,12 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
 
         if (result is CodeModernizerJobCompletedResult.JobPaused) {
             codeTransformationSession?.setHilDownloadArtifactId(result.downloadArtifactId)
-
             CodeTransformMessageListener.instance.onStartingHil()
+            return
+        }
 
+        if (result is CodeModernizerJobCompletedResult.ClientBuilding) {
+            CodeTransformMessageListener.instance.onClientBuild()
             return
         }
 
@@ -649,6 +653,7 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
             )
 
             is CodeModernizerJobCompletedResult.JobPaused -> return
+            is CodeModernizerJobCompletedResult.ClientBuilding -> return
         }
         telemetry.totalRunTime(result.toString(), jobId)
     }
@@ -868,7 +873,7 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
                 // Add delay between upload complete and trying to resume
                 delay(500)
 
-                codeTransformationSession?.resumeTransformFromHil()
+                codeTransformationSession?.resumeTransform()
             } else {
                 throw CodeModernizerException("Cannot create dependency zip for HIL")
             }
@@ -909,5 +914,113 @@ class CodeModernizerManager(private val project: Project) : PersistentStateCompo
         val session = this.codeTransformationSession ?: return
         if (session.getActiveJobId() != job) return
         setJobOngoing(job, session.sessionContext)
+    }
+
+    suspend fun getClientBuildArtifact(): CodeTransformClientBuildDownloadArtifact {
+        val jobId = codeTransformationSession?.getActiveJobId() ?: throw CodeModernizerException("Unable to find jobId")
+        val clientBuildInstructionId = codeTransformationSession?.getClientBuildArtifactId() ?: throw CodeModernizerException("Unable to find client build artifact id")
+
+        val tmpDir = try {
+            createTempDirectory("", null)
+        } catch (e: Exception) {
+            LOG.error { "Unexpected error when creating tmp dir for client build instruction: ${e.localizedMessage}" }
+            throw CodeModernizerException("Unable to create temp dir for client build")
+        }
+        try {
+            val clientBuildArtifact = artifactHandler.downloadClientBuildArtifact(jobId, clientBuildInstructionId, tmpDir)
+            LOG.info { "Received client build instructions: ${clientBuildArtifact.instructions}" }
+            codeTransformationSession?.setClientBuildArtifact(clientBuildArtifact)
+            return clientBuildArtifact
+        } catch (e: Exception) {
+            LOG.error { e.message.toString() }
+            throw CodeModernizerException("Unable to download client build artifact")
+        }
+    }
+
+    fun handleClientSideBuild(): MavenCopyCommandsResult? {
+        val instructions = codeTransformationSession?.getClientBuildArtifact()?.instructions
+        val artifactDirectory = codeTransformationSession?.getClientBuildArtifact()?.outputDirPath
+        if (instructions == null) {
+            throw CodeModernizerException("Unable to find client build instructions from Session state")
+        }
+        val buildCommand = instructions.buildCommand
+        val javaVersion = instructions.javaVersion
+
+        if (artifactDirectory == null) {
+            throw CodeModernizerException("Unable to find client build directory code path from Session state")
+        }
+
+        val sourceFolder = File(artifactDirectory.toString())
+        val result: MavenCopyCommandsResult? =
+            codeTransformationSession?.sessionContext?.executeMavenClientBuildCommand(sourceFolder, buildCommand, javaVersion)
+
+        if (result == MavenCopyCommandsResult.Failure) {
+            CodeTransformMessageListener.instance.onMavenBuildResult(result)
+        } else {
+            LOG.info { "Client side maven build result ${result.toString()} "}
+        }
+
+        return result
+    }
+
+    suspend fun uploadClientSideBuildArtifact(clientSideBuildPath: Path, buildResult: MavenCopyCommandsResult?) {
+        var zipFile: File? = null
+        try {
+            val buildLogZipCreationResult = codeTransformationSession?.createClientBuildLogUploadZip(clientSideBuildPath)
+            if (buildLogZipCreationResult?.payload?.exists() == true) {
+                zipFile = buildLogZipCreationResult.payload
+                LOG.info { "Uploading build log zip at ${buildLogZipCreationResult.payload.path}" }
+                codeTransformationSession?.uploadClientBuildPayload(buildLogZipCreationResult.payload)
+
+                // Add delay between upload complete and trying to resume
+                delay(500)
+            } else {
+                throw CodeModernizerException("Cannot create dependency zip for HIL")
+            }
+        } catch (e: Exception) {
+            LOG.error { "Unable to zip or upload build log after client side build: ${e.localizedMessage}" }
+            throw e
+        } finally {
+            // clean up the zip file
+            zipFile?.delete()
+        }
+
+        // Only upload source code if Maven build was successful. Otherwise backend will think the build was successful if there are two artifacts
+        // uploaded.
+        // DEMO: TODO: this might need to be changed depending on finalized design
+        if (buildResult != MavenCopyCommandsResult.Failure && buildResult != MavenCopyCommandsResult.Cancelled) {
+            try {
+                val sourceCodeZipCreationResult = codeTransformationSession?.createClientBuildSourceUploadZip(clientSideBuildPath)
+                if (sourceCodeZipCreationResult?.payload?.exists() == true) {
+                    zipFile = sourceCodeZipCreationResult.payload
+                    LOG.info { "Uploading client build source code at ${sourceCodeZipCreationResult.payload.path}" }
+                    codeTransformationSession?.uploadClientBuildPayload(sourceCodeZipCreationResult.payload)
+
+                    // Add delay between upload complete and trying to resume
+                    delay(500)
+                } else {
+                    throw CodeModernizerException("Cannot create dependency zip for HIL")
+                }
+            } catch (e: Exception) {
+                LOG.error { "Unable to zip or upload source code after client side build: ${e.localizedMessage}" }
+                throw e
+            } finally {
+                // clean up the zip
+                zipFile?.delete()
+            }
+        } else {
+            // DEMO: TODO: Update depending on finalized design
+            LOG.info { "Skipping uploading client build source code since maven build was not successful" }
+        }
+    }
+
+    fun tryResumeAfterClientBuild() {
+        try {
+            codeTransformationSession?.resumeTransform()
+        } catch (e: Exception) {
+            val errorMessage = "Unexpected error when resuming Job from Client Build: ${e.localizedMessage}"
+            telemetry.error(errorMessage)
+            LOG.error { errorMessage }
+        }
     }
 }

@@ -93,6 +93,29 @@ class GumbyClient(private val project: Project) {
         return callApi({ bearerClient().createUploadUrl(request) }, apiName = CodeTransformApiNames.CreateUploadUrl)
     }
 
+    // TODO: This is currently a duplicate of createHilUploadUrl since both uses DEPENDENCIES artifact type
+    //  consider merging if finalized design decide that the flow will stay the same
+    fun createClientBuildUploadUrl(sha256Checksum: String, jobId: JobId): CreateUploadUrlResponse {
+        val request = CreateUploadUrlRequest.builder()
+            .contentChecksumType(ContentChecksumType.SHA_256)
+            .contentChecksum(sha256Checksum)
+            .uploadIntent(UploadIntent.TRANSFORMATION)
+            .uploadContext(
+                UploadContext
+                    .builder()
+                    .transformationUploadContext(
+                        TransformationUploadContext
+                            .builder()
+                            .uploadArtifactType(TransformationUploadArtifactType.DEPENDENCIES)
+                            .jobId(jobId.id)
+                            .build()
+                    )
+                    .build()
+            )
+            .build()
+        return callApi({ bearerClient().createUploadUrl(request) }, apiName = CodeTransformApiNames.CreateUploadUrl)
+    }
+
     fun getCodeModernizationJob(jobId: String): GetTransformationResponse {
         val request = GetTransformationRequest.builder().transformationJobId(jobId).build()
         return callApi({ bearerClient().getTransformation(request) }, apiName = CodeTransformApiNames.GetTransformation, jobId = jobId)
